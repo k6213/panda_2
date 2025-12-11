@@ -23,11 +23,11 @@ function AgentDashboard({ user, onLogout }) {
     });
 
     // 데이터 로딩 함수
-    const fetchCustomers = () => fetch('http://127.0.0.1:8000/api/customers/').then(res => res.json()).then(setCustomers);
-    const fetchFailureReasons = () => fetch('http://127.0.0.1:8000/api/failure_reasons/').then(res => res.json()).then(setFailureReasons);
+    const fetchCustomers = () => fetch('https://panda-1-hd18.onrender.com/api/customers/').then(res => res.json()).then(setCustomers);
+    const fetchFailureReasons = () => fetch('https://panda-1-hd18.onrender.com/api/failure_reasons/').then(res => res.json()).then(setFailureReasons);
     const fetchMyStats = () => {
         if (!user) return;
-        fetch(`http://127.0.0.1:8000/api/my_stats/?user_id=${user.user_id}`).then(res => res.json()).then(setMyStats);
+        fetch(`https://panda-1-hd18.onrender.com/api/my_stats/?user_id=${user.user_id}`).then(res => res.json()).then(setMyStats);
     };
 
     // ⭐️ [핵심] 10초 자동 갱신 로직
@@ -64,7 +64,7 @@ function AgentDashboard({ user, onLogout }) {
     // 핸들러 함수들
     const handleAssign = (id) => {
         if (!window.confirm("담당하시겠습니까?")) return;
-        fetch(`http://127.0.0.1:8000/api/customers/${id}/assign/`, {
+        fetch(`https://panda-1-hd18.onrender.com/api/customers/${id}/assign/`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: user.user_id })
         }).then(() => { alert("배정 완료!"); fetchCustomers(); setActiveTab('consult'); });
     };
@@ -72,7 +72,7 @@ function AgentDashboard({ user, onLogout }) {
     const handleUpdateInfo = () => {
         if (!selectedCustomer) return;
         const payload = { ...editData, checklist: editData.checklist.join(',') };
-        fetch(`http://127.0.0.1:8000/api/customers/${selectedCustomer.id}/update/`, {
+        fetch(`https://panda-1-hd18.onrender.com/api/customers/${selectedCustomer.id}/update/`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
         }).then(() => { alert("저장됨"); fetchCustomers(); setSelectedCustomer(null); });
     };
@@ -82,7 +82,7 @@ function AgentDashboard({ user, onLogout }) {
         const currentList = customer.checklist ? customer.checklist.split(',') : [];
         const isDone = currentList.includes('완료');
         const newList = isDone ? [] : ['완료'];
-        fetch(`http://127.0.0.1:8000/api/customers/${customer.id}/update/`, {
+        fetch(`https://panda-1-hd18.onrender.com/api/customers/${customer.id}/update/`, {
             method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ checklist: newList.join(',') })
         }).then(() => {
             const updated = customers.map(c => c.id === customer.id ? { ...c, checklist: newList.join(',') } : c);
@@ -92,9 +92,9 @@ function AgentDashboard({ user, onLogout }) {
 
     const handleAddLog = () => {
         if (!newLog) return;
-        fetch(`http://127.0.0.1:8000/api/customers/${selectedCustomer.id}/add_log/`, {
+        fetch(`https://panda-1-hd18.onrender.com/api/customers/${selectedCustomer.id}/add_log/`, {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ user_id: user.user_id, content: newLog })
-        }).then(res => res.ok ? fetch('http://127.0.0.1:8000/api/customers/') : Promise.reject()).then(res => res.json()).then(data => { setCustomers(data); const updated = data.find(c => c.id === selectedCustomer.id); if (updated) setSelectedCustomer(updated); setNewLog(''); });
+        }).then(res => res.ok ? fetch('https://panda-1-hd18.onrender.com/api/customers/') : Promise.reject()).then(res => res.json()).then(data => { setCustomers(data); const updated = data.find(c => c.id === selectedCustomer.id); if (updated) setSelectedCustomer(updated); setNewLog(''); });
     };
 
     const handlePaste = (e) => {
@@ -108,7 +108,7 @@ function AgentDashboard({ user, onLogout }) {
 
     const handleBulkSubmit = () => {
         if (parsedData.length === 0) return;
-        fetch('http://127.0.0.1:8000/api/customers/bulk_upload/', {
+        fetch('https://panda-1-hd18.onrender.com/api/customers/bulk_upload/', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customers: parsedData })
         }).then(res => res.json()).then(data => { alert(data.message); setShowUploadModal(false); setPasteData(''); setParsedData([]); fetchCustomers(); });
     };

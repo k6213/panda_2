@@ -27,17 +27,17 @@ function AdminDashboard({ user, onLogout }) {
     // 10초 자동 갱신
     useEffect(() => {
         const fetchData = () => {
-            if (activeTab === 'stats') fetch('http://127.0.0.1:8000/api/stats/').then(res => res.json()).then(setStats);
-            else if (activeTab === 'shared') fetch('http://127.0.0.1:8000/api/customers/').then(res => res.json()).then(data => setSharedCustomers(data.filter(c => c.owner === null)));
-            else if (activeTab === 'as_manage') fetch('http://127.0.0.1:8000/api/customers/').then(res => res.json()).then(data => setAsRequests(data.filter(c => c.status === 'AS요청')));
-            else if (activeTab === 'users') fetch('http://127.0.0.1:8000/api/agents/').then(res => res.json()).then(setAgents);
+            if (activeTab === 'stats') fetch('https://panda-1-hd18.onrender.com/api/stats/').then(res => res.json()).then(setStats);
+            else if (activeTab === 'shared') fetch('https://panda-1-hd18.onrender.com/api/customers/').then(res => res.json()).then(data => setSharedCustomers(data.filter(c => c.owner === null)));
+            else if (activeTab === 'as_manage') fetch('https://panda-1-hd18.onrender.com/api/customers/').then(res => res.json()).then(data => setAsRequests(data.filter(c => c.status === 'AS요청')));
+            else if (activeTab === 'users') fetch('https://panda-1-hd18.onrender.com/api/agents/').then(res => res.json()).then(setAgents);
             else if (activeTab === 'settings') {
-                fetch('http://127.0.0.1:8000/api/platforms/').then(res => res.json()).then(setPlatforms);
-                fetch('http://127.0.0.1:8000/api/failure_reasons/').then(res => res.json()).then(setReasons);
+                fetch('https://panda-1-hd18.onrender.com/api/platforms/').then(res => res.json()).then(setPlatforms);
+                fetch('https://panda-1-hd18.onrender.com/api/failure_reasons/').then(res => res.json()).then(setReasons);
             }
             // 배정 기능을 위해 상담사 목록은 항상 필요할 수 있음
-            fetch('http://127.0.0.1:8000/api/agents/').then(res => res.json()).then(setAgents);
-            fetch('http://127.0.0.1:8000/api/customers/').then(res => res.json()).then(setAllCustomers);
+            fetch('https://panda-1-hd18.onrender.com/api/agents/').then(res => res.json()).then(setAgents);
+            fetch('https://panda-1-hd18.onrender.com/api/customers/').then(res => res.json()).then(setAllCustomers);
         };
 
         fetchData();
@@ -74,7 +74,7 @@ function AdminDashboard({ user, onLogout }) {
         const agentName = agents.find(a => a.id === parseInt(targetAgentId))?.username;
         if (!window.confirm(`선택한 ${selectedIds.length}개의 DB를 '${agentName}'님에게 배정하시겠습니까?`)) return;
 
-        fetch('http://127.0.0.1:8000/api/customers/allocate/', {
+        fetch('https://panda-1-hd18.onrender.com/api/customers/allocate/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -86,7 +86,7 @@ function AdminDashboard({ user, onLogout }) {
             setSelectedIds([]); // 선택 초기화
 
             // 목록 새로고침
-            fetch('http://127.0.0.1:8000/api/customers/').then(res => res.json()).then(data => setSharedCustomers(data.filter(c => c.owner === null)));
+            fetch('https://panda-1-hd18.onrender.com/api/customers/').then(res => res.json()).then(data => setSharedCustomers(data.filter(c => c.owner === null)));
         });
     };
 
@@ -101,22 +101,22 @@ function AdminDashboard({ user, onLogout }) {
     };
     const handleBulkSubmit = () => {
         if (parsedData.length === 0) return;
-        fetch('http://127.0.0.1:8000/api/customers/bulk_upload/', {
+        fetch('https://panda-1-hd18.onrender.com/api/customers/bulk_upload/', {
             method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customers: parsedData })
         }).then(res => res.json()).then(data => {
             alert(data.message); setShowUploadModal(false); setPasteData(''); setParsedData([]);
         });
     };
     const isDuplicate = (phone) => allCustomers.some(c => c.phone === phone);
-    const handleCreateAgent = () => { fetch('http://127.0.0.1:8000/api/agents/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newAgent) }).then(res => { if (res.ok) { alert("완료"); setNewAgent({ username: '', password: '' }); } }); };
-    const handleDeleteAgent = (id, name) => { if (window.confirm(`'${name}' 삭제?`)) fetch(`http://127.0.0.1:8000/api/agents/${id}/`, { method: 'DELETE' }); };
-    const handleDeleteCustomer = (id) => { if (window.confirm("DB 삭제?")) fetch(`http://127.0.0.1:8000/api/customers/${id}/`, { method: 'DELETE' }); };
-    const handleAsAction = (id, action) => { if (!window.confirm("처리?")) return; fetch(`http://127.0.0.1:8000/api/customers/${id}/handle_as/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }).then(res => res.json()).then(data => { alert(data.message); }); };
-    const handleSavePlatform = () => { fetch('http://127.0.0.1:8000/api/platforms/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newPlatform) }).then(res => { if (res.ok) { alert("저장됨"); setNewPlatform({ name: '', cost: '' }); } }); };
-    const handleDeletePlatform = (id) => { if (window.confirm("삭제?")) fetch(`http://127.0.0.1:8000/api/platforms/${id}/`, { method: 'DELETE' }); };
-    const handleAddReason = () => { fetch('http://127.0.0.1:8000/api/failure_reasons/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: newReason }) }).then(() => { alert("추가됨"); setNewReason(''); }); };
-    const handleDeleteReason = (id) => { if (!window.confirm("삭제?")) return; fetch(`http://127.0.0.1:8000/api/failure_reasons/${id}/`, { method: 'DELETE' }); };
-    const handleApplyAllCosts = () => { if (window.confirm("전체 적용?")) fetch('http://127.0.0.1:8000/api/platforms/apply_all/', { method: 'POST' }).then(res => res.json()).then(data => alert(data.message)); };
+    const handleCreateAgent = () => { fetch('https://panda-1-hd18.onrender.com/api/agents/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newAgent) }).then(res => { if (res.ok) { alert("완료"); setNewAgent({ username: '', password: '' }); } }); };
+    const handleDeleteAgent = (id, name) => { if (window.confirm(`'${name}' 삭제?`)) fetch(`https://panda-1-hd18.onrender.com/api/agents/${id}/`, { method: 'DELETE' }); };
+    const handleDeleteCustomer = (id) => { if (window.confirm("DB 삭제?")) fetch(`https://panda-1-hd18.onrender.com/api/customers/${id}/`, { method: 'DELETE' }); };
+    const handleAsAction = (id, action) => { if (!window.confirm("처리?")) return; fetch(`https://panda-1-hd18.onrender.com/api/customers/${id}/handle_as/`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action }) }).then(res => res.json()).then(data => { alert(data.message); }); };
+    const handleSavePlatform = () => { fetch('https://panda-1-hd18.onrender.com/api/platforms/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(newPlatform) }).then(res => { if (res.ok) { alert("저장됨"); setNewPlatform({ name: '', cost: '' }); } }); };
+    const handleDeletePlatform = (id) => { if (window.confirm("삭제?")) fetch(`https://panda-1-hd18.onrender.com/api/platforms/${id}/`, { method: 'DELETE' }); };
+    const handleAddReason = () => { fetch('https://panda-1-hd18.onrender.com/api/failure_reasons/', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason: newReason }) }).then(() => { alert("추가됨"); setNewReason(''); }); };
+    const handleDeleteReason = (id) => { if (!window.confirm("삭제?")) return; fetch(`https://panda-1-hd18.onrender.com/api/failure_reasons/${id}/`, { method: 'DELETE' }); };
+    const handleApplyAllCosts = () => { if (window.confirm("전체 적용?")) fetch('https://panda-1-hd18.onrender.com/api/platforms/apply_all/', { method: 'POST' }).then(res => res.json()).then(data => alert(data.message)); };
 
     return (
         <div className="min-h-screen bg-[#2b2b2b] text-gray-100 p-5 font-sans">
