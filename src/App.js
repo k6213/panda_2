@@ -1,13 +1,14 @@
 ﻿import React, { useState } from 'react';
 import AgentDashboard from './AgentDashboard';
 import AdminDashboard from './AdminDashboard';
-import LandingPage from './LandingPage'; // 새로 만든 업무용 랜딩페이지
+import LandingPage from './LandingPage';
 
 function App() {
     const [user, setUser] = useState(null);
 
-    // 로그인 처리 함수 (LandingPage에서 아이디/비번을 받아옴)
+    // 로그인 처리 함수
     const handleLogin = (username, password) => {
+        // ⚠️ 주의: 백엔드 CORS 설정 주소와 똑같이 맞춰주세요 (localhost 또는 127.0.0.1)
         fetch('https://panda-1-hd18.onrender.com/api/login/', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -18,13 +19,20 @@ function App() {
                 throw new Error('로그인 실패');
             })
             .then(data => {
-                // alert(`${data.username}님, 오늘도 좋은 하루 되세요! ☀️`); // (선택사항) 환영 메시지
+                // ⭐️ [핵심 수정] 서버가 준 'token'을 브라우저에 저장합니다.
+                if (data.token) {
+                    localStorage.setItem('token', data.token);
+                }
+
+                // 사용자 정보 상태 업데이트
                 setUser(data);
             })
             .catch(() => alert('아이디 또는 비밀번호가 일치하지 않습니다.'));
     };
 
     const handleLogout = () => {
+        // ⭐️ [핵심 수정] 로그아웃 시 저장된 토큰도 삭제합니다.
+        localStorage.removeItem('token');
         setUser(null);
     };
 
