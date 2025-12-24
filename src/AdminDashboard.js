@@ -1,6 +1,8 @@
 ﻿import React, { useState, useEffect, useCallback, useMemo } from 'react';
 
-// API 주소
+// ==================================================================================
+// 1. 상수 및 설정값
+// ==================================================================================
 const API_BASE = "https://panda-1-hd18.onrender.com";
 
 // 정산 관리 탭에 노출될 상태값들
@@ -42,9 +44,11 @@ const formatCurrency = (num) => {
 };
 
 function AdminDashboard({ user, onLogout }) {
+    // ==================================================================================
+    // 2. State 관리
+    // ==================================================================================
     const [activeTab, setActiveTab] = useState('stats');
     const [periodFilter, setPeriodFilter] = useState('month');
-    const [stats, setStats] = useState(null);
     const [agents, setAgents] = useState([]);
 
     // --- 설정값 상태들 ---
@@ -101,19 +105,20 @@ function AdminDashboard({ user, onLogout }) {
     // =========================================================================
     // 🔄 API 호출
     // =========================================================================
-    const fetchStats = useCallback(() => {
-        fetch(`${API_BASE}/api/stats/?period=${periodFilter}`, { headers: getAuthHeaders() })
-            .then(res => res.json()).then(setStats).catch(err => console.error(err));
-    }, [periodFilter]);
+
+    // ⚠️ 기존 fetchStats 제거됨 (프론트엔드 직접 계산으로 변경)
 
     const fetchAllData = useCallback(() => {
         fetch(`${API_BASE}/api/customers/`, { headers: getAuthHeaders() })
             .then(res => res.json())
             .then(data => {
-                setAllCustomers(data);
-                setSharedCustomers(data.filter(c => c.owner === null));
-                setIssueCustomers(data.filter(c => c.status === '실패' || c.status === 'AS요청'));
-            });
+                setAllCustomers(Array.isArray(data) ? data : []);
+                if (Array.isArray(data)) {
+                    setSharedCustomers(data.filter(c => c.owner === null));
+                    setIssueCustomers(data.filter(c => c.status === '실패' || c.status === 'AS요청'));
+                }
+            })
+            .catch(err => console.error("데이터 로드 실패:", err));
     }, []);
 
     const fetchAgents = useCallback(() => {
@@ -131,15 +136,14 @@ function AdminDashboard({ user, onLogout }) {
 
     const loadCurrentTabData = useCallback(() => {
         setSelectedIds([]);
-        if (activeTab === 'stats') { fetchStats(); fetchAllData(); fetchAgents(); }
-        else if (['total_manage', 'shared', 'issue_manage', 'reception', 'installation', 'settlement'].includes(activeTab)) {
-            fetchAllData(); fetchAgents();
-            if (activeTab === 'issue_manage') fetch(`${API_BASE}/api/failure_reasons/`, { headers: getAuthHeaders() }).then(res => res.json()).then(setReasons);
-            if (activeTab === 'settlement') fetch(`${API_BASE}/api/settlement_statuses/`, { headers: getAuthHeaders() }).then(res => res.json()).then(setSettlementStatuses);
-        }
-        else if (activeTab === 'users') fetchAgents();
-        else if (activeTab === 'settings') fetchSettings();
-    }, [activeTab, fetchStats, fetchAllData, fetchAgents, fetchSettings]);
+        // 탭 상관없이 항상 전체 데이터를 가져와야 통계가 정확함
+        fetchAllData();
+        fetchAgents();
+
+        if (activeTab === 'issue_manage') fetch(`${API_BASE}/api/failure_reasons/`, { headers: getAuthHeaders() }).then(res => res.json()).then(setReasons);
+        if (activeTab === 'settlement') fetch(`${API_BASE}/api/settlement_statuses/`, { headers: getAuthHeaders() }).then(res => res.json()).then(setSettlementStatuses);
+        if (activeTab === 'settings') fetchSettings();
+    }, [activeTab, fetchAllData, fetchAgents, fetchSettings]);
 
     useEffect(() => {
         loadCurrentTabData();
@@ -152,8 +156,83 @@ function AdminDashboard({ user, onLogout }) {
     }, [loadCurrentTabData, showUploadModal, activeTab]);
 
     // =========================================================================
-    // 🧠 데이터 로직
+    // 🧠 데이터 로직 & ⭐️ [통계 계산 수정]
     // =========================================================================
+
+    // 1. 기간별 데이터 필터링 (통계용)
+    const filteredCustomersByPeriod = useMemo(() => {
+        if (!allCustomers) return [];
+
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()); // 시간 초기화
+
+        return allCustomers.filter(c => {
+            if (!c.upload_date) return false;
+            const cDate = new Date(c.upload_date);
+            const targetDate = new Date(cDate.getFullYear(), cDate.getMonth(), cDate.getDate()); // 시간 초기화
+
+            if (periodFilter === 'today') {
+                return targetDate.getTime() === today.getTime();
+            }
+            if (periodFilter === 'week') {
+                const day = now.getDay(); // 0(일) ~ 6(토)
+                const diff = now.getDate() - day + (day === 0 ? -6 : 1); // 월요일 기준 계산
+                const monday = new Date(now);
+                monday.setDate(diff);
+                monday.setHours(0, 0, 0, 0);
+                return targetDate >= monday;
+            }
+            if (periodFilter === 'month') {
+                return targetDate.getMonth() === today.getMonth() && targetDate.getFullYear() === today.getFullYear();
+            }
+            return true; // all
+        });
+    }, [allCustomers, periodFilter]);
+
+    // 2. 대시보드 통계 계산 (API 의존 제거)
+    const dashboardStats = useMemo(() => {
+        const data = filteredCustomersByPeriod;
+
+        // (1) 총 유입 DB
+        const total_db = data.length;
+
+        // (2) 전체 접수 완료 (접수완료 + 설치완료)
+        const success_list = data.filter(c => ['접수완료', '설치완료'].includes(c.status));
+        const success_count = success_list.length;
+
+        // (3) 총 광고비 집행
+        const total_ad_cost = data.reduce((acc, c) => acc + (parseInt(c.ad_cost || 0)), 0);
+
+        // (4) 설치 완료 매출 (설치완료 건의 정책금 합계)
+        const installed_list = data.filter(c => c.status === '설치완료');
+        const installed_revenue = installed_list.reduce((acc, c) => acc + (parseInt(c.policy_amt || 0) * 10000), 0);
+
+        // (5) 전체 순수익 ((정책금 - 지원금) * 10000) -> 접수완료 + 설치완료 대상
+        const net_profit = success_list.reduce((acc, c) => {
+            const policy = parseInt(c.policy_amt || 0);
+            const support = parseInt(c.support_amt || 0);
+            return acc + ((policy - support) * 10000);
+        }, 0);
+
+        return { total_db, success_count, total_ad_cost, installed_revenue, net_profit };
+    }, [filteredCustomersByPeriod]);
+
+    // 3. 통계 상세 리스트 데이터
+    const statDetailData = useMemo(() => {
+        if (!statDetailType) return [];
+        const data = filteredCustomersByPeriod;
+
+        switch (statDetailType) {
+            case 'total': return data;
+            case 'success': return data.filter(c => ['접수완료', '설치완료'].includes(c.status));
+            case 'ad': return data.filter(c => (c.ad_cost && c.ad_cost > 0));
+            case 'installed': return data.filter(c => c.status === '설치완료');
+            case 'profit': return data.filter(c => ['접수완료', '설치완료'].includes(c.status));
+            default: return [];
+        }
+    }, [statDetailType, filteredCustomersByPeriod]);
+
+    // 4. 기타 탭별 데이터 필터링
     const duplicateSet = useMemo(() => {
         const phoneCounts = {};
         const dups = new Set();
@@ -196,56 +275,18 @@ function AdminDashboard({ user, onLogout }) {
         return data;
     }, [activeTab, allCustomers, sharedCustomers, issueCustomers, viewDuplicatesOnly, duplicateSet, totalDbAgentFilter, issueSubTab, failReasonFilter, salesAgentFilter, settlementStatusFilter]);
 
-    // ⭐️ [통합 요약 계산 Hook]
+    // 탭별 요약 (접수/설치/정산용)
     const tabSummary = useMemo(() => {
         if (!displayedData) return null;
-
-        // 1. 기본 건수
         const totalCount = displayedData.length;
-
-        // 2. 광고비 합계 (전체DB, 미배정 탭용)
         const totalAdCost = displayedData.reduce((acc, c) => acc + (parseInt(c.ad_cost || 0)), 0);
-
-        // 3. 순수익 합계 (접수, 설치, 정산 탭용)
-        // 로직: (본사정책 - 지원금) * 10000
         const totalMargin = displayedData.reduce((acc, c) => {
             const hqPolicy = parseInt(c.policy_amt || 0);
             const supportAmt = parseInt(c.support_amt || 0);
             return acc + (hqPolicy - supportAmt) * 10000;
         }, 0);
-
         return { totalCount, totalAdCost, totalMargin };
     }, [displayedData]);
-
-
-    const statDetailData = useMemo(() => {
-        if (!statDetailType) return [];
-        const filterByDate = (customer) => {
-            const date = new Date(customer.upload_date);
-            const now = new Date();
-            const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-
-            if (periodFilter === 'today') return date.toDateString() === today.toDateString();
-            if (periodFilter === 'week') {
-                const diff = now.getDate() - now.getDay();
-                const sunday = new Date(now.setDate(diff));
-                return date >= sunday;
-            }
-            if (periodFilter === 'month') return date.getMonth() === now.getMonth() && date.getFullYear() === now.getFullYear();
-            return true;
-        };
-
-        const filteredByDate = allCustomers.filter(filterByDate);
-
-        switch (statDetailType) {
-            case 'total': return filteredByDate;
-            case 'success': return filteredByDate.filter(c => ['접수완료', '설치완료'].includes(c.status));
-            case 'ad': return filteredByDate.filter(c => (c.ad_cost && c.ad_cost > 0));
-            case 'installed': return filteredByDate.filter(c => c.status === '설치완료');
-            case 'profit': return filteredByDate.filter(c => ['접수완료', '설치완료'].includes(c.status));
-            default: return [];
-        }
-    }, [statDetailType, allCustomers, periodFilter]);
 
     // =========================================================================
     // 🎮 핸들러
@@ -297,7 +338,6 @@ function AdminDashboard({ user, onLogout }) {
     };
 
     const handleDeleteCustomer = (id) => { if (window.confirm("영구 삭제?")) fetch(`${API_BASE}/api/customers/${id}/`, { method: 'DELETE', headers: getAuthHeaders() }).then(() => loadCurrentTabData()); };
-    const handleApplyAllCosts = () => { if (window.confirm("전체 적용?")) fetch(`${API_BASE}/api/platforms/apply_all/`, { method: 'POST', headers: getAuthHeaders() }).then(res => res.json()).then(data => alert(data.message)); };
     const handlePaste = (e) => { const text = e.target.value; setPasteData(text); const rows = text.trim().split('\n').map(row => { const cols = row.split('\t').map(c => c.trim()); return { name: cols[0] || '이름없음', phone: cols[1] || '', platform: cols[2] || '기타', last_memo: cols.slice(2).filter(Boolean).join(' / '), upload_date: new Date().toISOString().slice(0, 10) }; }); setParsedData(rows); };
     const handleBulkSubmit = () => { if (parsedData.length === 0) return; fetch(`${API_BASE}/api/customers/bulk_upload/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ customers: parsedData }) }).then(async (res) => { const data = await res.json(); if (res.ok) { alert(data.message); setShowUploadModal(false); setPasteData(''); setParsedData([]); loadCurrentTabData(); } else { alert(`오류: ${data.message}`); } }).catch(err => console.error(err)); };
     const handleSelectAll = (e, dataList) => { if (e.target.checked) setSelectedIds(dataList.map(c => c.id)); else setSelectedIds([]); };
@@ -305,6 +345,9 @@ function AdminDashboard({ user, onLogout }) {
     const getAgentName = (id) => { if (!id) return '-'; const agent = agents.find(a => a.id === id); return agent ? agent.username : '알수없음'; };
     const handleToggleStatDetail = (type) => { if (statDetailType === type) setStatDetailType(null); else setStatDetailType(type); };
 
+    // =========================================================================
+    // 🖥️ 렌더링
+    // =========================================================================
     return (
         <div className="min-h-screen bg-[#2b2b2b] text-gray-100 p-5 font-sans relative overflow-hidden">
             <header className="flex justify-between items-center bg-[#1e1e1e] p-4 rounded-xl shadow-lg mb-6 border-l-4 border-yellow-500">
@@ -334,8 +377,8 @@ function AdminDashboard({ user, onLogout }) {
 
             <div className="bg-[#383838] rounded-xl shadow-xl min-h-[600px] border border-gray-700 p-6 overflow-x-auto">
 
-                {/* 1. [실적 현황] */}
-                {activeTab === 'stats' && stats && (
+                {/* 1. [실적 현황] - 프론트엔드 계산 사용 */}
+                {activeTab === 'stats' && (
                     <div className="animate-fade-in">
                         <div className="flex justify-between items-center mb-6">
                             <h2 className="text-2xl font-bold border-l-4 border-yellow-500 pl-4">통합 영업 지표</h2>
@@ -349,23 +392,23 @@ function AdminDashboard({ user, onLogout }) {
                         <div className="grid grid-cols-5 gap-4 mb-8">
                             <div onClick={() => handleToggleStatDetail('total')} className={`bg-[#444] p-5 rounded-xl border cursor-pointer hover:bg-[#555] transition transform hover:scale-105 ${statDetailType === 'total' ? 'border-yellow-400 ring-2 ring-yellow-400' : 'border-gray-600'}`}>
                                 <h3 className="text-gray-400 text-xs flex justify-between">총 유입 DB <span>{statDetailType === 'total' ? '🔼 접기' : '🔽 상세'}</span></h3>
-                                <p className="text-2xl font-bold text-white mt-1">{(stats.total_db || 0).toLocaleString()}건</p>
+                                <p className="text-2xl font-bold text-white mt-1">{formatCurrency(dashboardStats.total_db)}건</p>
                             </div>
                             <div onClick={() => handleToggleStatDetail('success')} className={`bg-[#2c3e50] p-5 rounded-xl border cursor-pointer hover:bg-[#34495e] transition transform hover:scale-105 ${statDetailType === 'success' ? 'border-yellow-400 ring-2 ring-yellow-400' : 'border-blue-600'}`}>
                                 <h3 className="text-blue-200 text-xs flex justify-between">전체 접수 완료 <span>{statDetailType === 'success' ? '🔼 접기' : '🔽 상세'}</span></h3>
-                                <p className="text-2xl font-bold text-blue-400 mt-1">{(stats.success_count || 0).toLocaleString()}건</p>
+                                <p className="text-2xl font-bold text-blue-400 mt-1">{formatCurrency(dashboardStats.success_count)}건</p>
                             </div>
                             <div onClick={() => handleToggleStatDetail('ad')} className={`bg-[#444] p-5 rounded-xl border cursor-pointer hover:bg-[#555] transition transform hover:scale-105 ${statDetailType === 'ad' ? 'border-yellow-400 ring-2 ring-yellow-400' : 'border-gray-600'}`}>
                                 <h3 className="text-gray-400 text-xs flex justify-between">총 광고비 집행 <span>{statDetailType === 'ad' ? '🔼 접기' : '🔽 상세'}</span></h3>
-                                <p className="text-2xl font-bold text-red-400 mt-1">{(stats.total_ad_cost || 0).toLocaleString()}원</p>
+                                <p className="text-2xl font-bold text-red-400 mt-1">{formatCurrency(dashboardStats.total_ad_cost)}원</p>
                             </div>
                             <div onClick={() => handleToggleStatDetail('installed')} className={`bg-[#1e3a2a] p-5 rounded-xl border cursor-pointer hover:bg-[#274b36] transition transform hover:scale-105 ${statDetailType === 'installed' ? 'border-yellow-400 ring-2 ring-yellow-400' : 'border-green-600'}`}>
                                 <h3 className="text-green-300 text-xs flex justify-between">설치 완료 매출 <span>{statDetailType === 'installed' ? '🔼 접기' : '🔽 상세'}</span></h3>
-                                <p className="text-2xl font-bold text-green-400 mt-1">{(stats.installed_revenue || 0).toLocaleString()}원</p>
+                                <p className="text-2xl font-bold text-green-400 mt-1">{formatCurrency(dashboardStats.installed_revenue)}원</p>
                             </div>
                             <div onClick={() => handleToggleStatDetail('profit')} className={`bg-[#444] p-5 rounded-xl border cursor-pointer hover:bg-[#555] transition transform hover:scale-105 ${statDetailType === 'profit' ? 'border-yellow-400 ring-2 ring-yellow-400' : 'border-gray-600'}`}>
                                 <h3 className="text-yellow-400 text-xs flex justify-between">💰 전체 순수익 <span>{statDetailType === 'profit' ? '🔼 접기' : '🔽 상세'}</span></h3>
-                                <p className="text-2xl font-bold text-yellow-400 mt-1">{(stats.net_profit || 0).toLocaleString()}원</p>
+                                <p className="text-2xl font-bold text-yellow-400 mt-1">{formatCurrency(dashboardStats.net_profit)}원</p>
                             </div>
                         </div>
                         {statDetailType && (
@@ -386,7 +429,6 @@ function AdminDashboard({ user, onLogout }) {
                                         <tbody>
                                             {statDetailData.map((c) => {
                                                 const revenue = parseInt(c.policy_amt || 0) * 10000;
-                                                // ⭐️ [실적탭] 상세 리스트도 (정책금 - 지원금)
                                                 const margin = (parseInt(c.policy_amt || 0) - parseInt(c.support_amt || 0)) * 10000;
                                                 return (
                                                     <tr key={c.id} className="border-b border-gray-700 hover:bg-[#444]">
@@ -410,7 +452,6 @@ function AdminDashboard({ user, onLogout }) {
                     <div>
                         <div className="flex justify-between items-center mb-6"><h2 className="text-xl font-bold">🗂️ 전체 DB 통합 관리</h2><div className="flex gap-2 items-center bg-[#2b2b2b] p-2 rounded-lg border border-gray-600"><span className="text-sm font-bold text-gray-400 mr-2">♻️ 재분배:</span><select className="bg-[#444] text-white p-1.5 rounded border border-gray-500 text-sm" value={targetAgentId} onChange={e => setTargetAgentId(e.target.value)}><option value="">이동할 상담사...</option>{agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}</select><button onClick={() => handleAllocate(loadCurrentTabData)} className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded font-bold text-sm">실행</button></div></div>
 
-                        {/* ⭐️ [추가된 요약] */}
                         {tabSummary && (
                             <div className="bg-[#222] p-4 rounded-lg mb-4 flex items-center gap-6 border border-gray-700 shadow-md">
                                 <span className="text-gray-400 font-bold border-r border-gray-600 pr-4">📊 전체 현황 요약</span>
@@ -433,7 +474,6 @@ function AdminDashboard({ user, onLogout }) {
                     <div>
                         <div className="flex justify-between items-center mb-4"><h2 className="text-xl font-bold flex items-center gap-2">🛒 미배정 DB 관리</h2><div className="flex gap-2"><button onClick={() => setViewDuplicatesOnly(!viewDuplicatesOnly)} className={`px-3 py-1 rounded text-xs font-bold border ${viewDuplicatesOnly ? 'bg-red-600 border-red-500 animate-pulse' : 'bg-[#444] border-gray-500'}`}>{viewDuplicatesOnly ? '✅ 전체 보기' : '🚫 중복 DB만 보기'}</button><select className="bg-[#444] text-white p-2 rounded border border-gray-500 text-sm" value={targetAgentId} onChange={e => setTargetAgentId(e.target.value)}><option value="">상담사 선택...</option>{agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}</select><button onClick={() => handleAllocate(loadCurrentTabData)} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded font-bold text-sm">일괄 배정</button></div></div>
 
-                        {/* ⭐️ [추가된 요약] */}
                         {tabSummary && (
                             <div className="bg-[#222] p-4 rounded-lg mb-4 flex items-center gap-6 border border-gray-700 shadow-md">
                                 <span className="text-gray-400 font-bold border-r border-gray-600 pr-4">📊 미배정 현황</span>
@@ -457,7 +497,6 @@ function AdminDashboard({ user, onLogout }) {
                             <select className="bg-[#333] border border-gray-600 rounded px-3 py-1 text-white text-sm" value={salesAgentFilter} onChange={e => setSalesAgentFilter(e.target.value)}><option value="">👤 전체 상담사 보기</option>{agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}</select>
                         </div>
 
-                        {/* ⭐️ [추가된 요약] */}
                         {tabSummary && (
                             <div className="bg-[#222] p-4 rounded-lg mb-4 flex items-center gap-6 border border-gray-700 shadow-md">
                                 <span className="text-gray-400 font-bold border-r border-gray-600 pr-4">📊 접수 현황 요약</span>
@@ -502,7 +541,6 @@ function AdminDashboard({ user, onLogout }) {
                             <select className="bg-[#333] border border-gray-600 rounded px-3 py-1 text-white text-sm" value={salesAgentFilter} onChange={e => setSalesAgentFilter(e.target.value)}><option value="">👤 전체 상담사 보기</option>{agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}</select>
                         </div>
 
-                        {/* ⭐️ [추가된 요약] */}
                         {tabSummary && (
                             <div className="bg-[#222] p-4 rounded-lg mb-4 flex items-center gap-6 border border-gray-700 shadow-md">
                                 <span className="text-gray-400 font-bold border-r border-gray-600 pr-4">📊 설치/개통 요약</span>
@@ -552,7 +590,6 @@ function AdminDashboard({ user, onLogout }) {
                             </div>
                         </div>
 
-                        {/* 기존 정산 요약 유지 (tabSummary Hook으로 대체 가능하지만, 기존 코드 유지) */}
                         {tabSummary && (
                             <div className="bg-[#222] p-4 rounded-lg mb-4 flex items-center gap-6 border border-gray-700 shadow-md">
                                 <span className="text-gray-400 font-bold border-r border-gray-600 pr-4">📊 현재 리스트 요약</span>
@@ -582,7 +619,6 @@ function AdminDashboard({ user, onLogout }) {
                                         const hqPolicy = parseInt(c.policy_amt || 0);
                                         const isMatch = agentPolicy === hqPolicy;
                                         const diff = hqPolicy - agentPolicy;
-                                        // ⭐️ [수정됨] 순수익 = 본사정책 - 지원금
                                         const netProfit = (hqPolicy - (c.support_amt || 0)) * 10000;
 
                                         return (
@@ -624,7 +660,7 @@ function AdminDashboard({ user, onLogout }) {
                 {/* 8. [상담사 관리] */}
                 {activeTab === 'users' && (<div className="flex gap-6"><div className="w-1/3 bg-[#2b2b2b] p-6 rounded border border-gray-600"><h3 className="font-bold mb-4">➕ 상담사 등록</h3><input className="w-full bg-[#444] p-2 rounded mb-2 border border-gray-600 text-white" placeholder="아이디" value={newAgent.username} onChange={e => setNewAgent({ ...newAgent, username: e.target.value })} /><input type="password" className="w-full bg-[#444] p-2 rounded mb-4 border border-gray-600 text-white" placeholder="비번" value={newAgent.password} onChange={e => setNewAgent({ ...newAgent, password: e.target.value })} /><button onClick={handleCreateAgent} className="w-full bg-blue-600 py-2 rounded text-white font-bold">등록</button></div><div className="w-2/3 bg-[#2b2b2b] p-6 rounded border border-gray-600"><table className="w-full text-sm text-left text-gray-300"><thead className="bg-[#1e1e1e]"><tr><th className="p-2">아이디</th><th className="p-2">관리</th></tr></thead><tbody>{agents.map(a => <tr key={a.id} className="border-b border-gray-700"><td className="p-2">{a.username}</td><td className="p-2"><button onClick={() => handleDeleteAgent(a.id, a.username)} className="text-red-400">삭제</button></td></tr>)}</tbody></table></div></div>)}
 
-                {/* ⭐️ 9. [설정] */}
+                {/* 9. [설정] */}
                 {activeTab === 'settings' && (
                     <div className="flex gap-6 h-[800px]">
                         <div className="w-1/3 flex flex-col gap-4 overflow-y-auto pr-2">

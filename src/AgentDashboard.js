@@ -45,6 +45,14 @@ function AgentDashboard({ user, onLogout }) {
     // ==================================================================================
     // 2. State 관리
     // ==================================================================================
+
+    const [isChatOpen, setIsChatOpen] = useState(false); // 채팅창 열림 여부
+    const [chatInputNumber, setChatInputNumber] = useState(''); // 대상 번호 입력
+    const [isSending, setIsSending] = useState(false);
+
+    const [showTokenModal, setShowTokenModal] = useState(false); // 모달 열림 상태
+    const [tempToken, setTempToken] = useState(user.fcm_token || '');
+
     const [customers, setCustomers] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [activeTab, setActiveTab] = useState('shared');
@@ -331,6 +339,76 @@ function AgentDashboard({ user, onLogout }) {
     // ==================================================================================
     // 6. Event Handlers
     // ==================================================================================
+
+    const handleSendPromoChat = async () => {
+        if (!chatInputNumber) return alert("번호를 입력해주세요.");
+        if (!user.fcm_token) return alert("먼저 안드로이드 폰을 연결해주세요!");
+
+        setIsSending(true);
+
+        // 홍보 링크 주소 (배정된 agent_id 포함)
+        const promoUrl = `https://your-landing-page.vercel.app/capture?agent_id=${user.user_id}`;
+        const initialMessage = `[상담안내] 안녕하세요! 아래 링크로 신청해주시면 빠른 안내 도와드리겠습니다.\n\n${promoUrl}`;
+
+        try {
+            const res = await fetch(`${API_BASE}/api/leads/capture/`, {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({
+                    phone: chatInputNumber,
+                    agent_id: user.user_id,
+                    name: "상담문의",
+                    message: initialMessage // 서버 views.py의 LeadCaptureView에서 처리
+                })
+            });
+
+            if (res.ok) {
+                alert("홍보 링크를 성공적으로 보냈습니다!");
+                // 발송 후 목록 갱신 및 채팅방 유지
+                fetchCustomers();
+            } else {
+                alert("발송 실패. 번호를 확인해주세요.");
+            }
+        } catch (err) {
+            alert("서버 연결 오류");
+        } finally {
+            setIsSending(false);
+        }
+    };
+
+
+    const handleUpdateToken = async () => {
+        if (!tempToken) return alert("토큰을 입력해주세요.");
+
+        try {
+            const res = await fetch(`${API_BASE}/api/agents/set-token/`, {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ fcm_token: tempToken })
+            });
+
+            if (res.ok) {
+                alert("📱 핸드폰 연결이 완료되었습니다!");
+
+                // 1. 새로고침(reload) 대신 모달만 닫기
+                setShowTokenModal(false);
+
+                // 2. 서버에서 최신 고객 데이터를 다시 가져오기 (필요한 경우)
+                fetchCustomers();
+
+                // 3. (중요) 상단 바의 '폰 연결됨' 표시를 즉시 바꾸고 싶다면?
+                // 현재 user 객체는 props로 내려받은 것이라 직접 수정이 안 됩니다.
+                // 가장 깔끔한 방법은 부모에게 유저 정보를 갱신하라고 알리거나, 
+                // 단순히 alert 후 상담사가 메뉴를 이동하게 두는 것입니다.
+
+            } else {
+                alert("연결 실패. 토큰을 다시 확인해주세요.");
+            }
+        } catch (err) {
+            alert("서버 통신 중 오류가 발생했습니다.");
+        }
+    };
+
     const handleInlineUpdate = async (id, field, value) => {
         setCustomers(prev => prev.map(c => c.id === id ? { ...c, [field]: value } : c));
         try {
@@ -492,7 +570,30 @@ function AgentDashboard({ user, onLogout }) {
 
             <header className="flex justify-between items-center bg-[#1e1e1e] p-4 rounded-xl shadow-lg mb-6 border border-gray-700 relative z-20">
                 <h1 className="text-xl font-bold text-white flex items-center gap-2">📞 {user.username}님의 워크스페이스</h1>
-                <div className="flex items-center gap-4">
+
+                <div className="flex items-center gap-6"> {/* gap을 6으로 늘려 버튼 사이 간격을 확보 */}
+
+                    {/* 1. 채팅 아이콘 버튼 (오직 아이콘만 출력) */}
+                    <button
+                        onClick={() => setIsChatOpen(!isChatOpen)}
+                        className={`text-2xl p-2 rounded-full transition-all shadow-md ${isChatOpen ? 'bg-yellow-400 text-black scale-110' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                            }`}
+                        title="홍보 링크 발송 및 대화"
+                    >
+                        💬
+                    </button>
+
+                    {/* 2. 폰 연결 상태 버튼 (텍스트 출력) */}
+                    <button
+                        onClick={() => setShowTokenModal(true)}
+                        className={`text-xs font-bold px-4 py-2 rounded-lg border transition-all ${user.fcm_token
+                                ? 'bg-blue-900/40 border-blue-500 text-blue-300'
+                                : 'bg-red-900/40 border-red-500 text-red-300 animate-pulse'
+                            }`}
+                    >
+                        {user.fcm_token ? '✅ 폰 연결됨' : '❌ 폰 미연결'}
+                    </button>
+
                     <div className="relative cursor-pointer" onClick={(e) => { e.stopPropagation(); setShowNotiDropdown(!showNotiDropdown); }}>
                         <span className="text-2xl hover:text-yellow-400 transition">🔔</span>
                         {notifications.length > 0 && <span className="absolute -top-1 -right-2 bg-red-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-bounce">{notifications.length}</span>}
@@ -732,6 +833,90 @@ function AgentDashboard({ user, onLogout }) {
                     </div>
                 </div>
             )}
+
+            {showTokenModal && (
+                <div className="fixed inset-0 bg-black/80 flex justify-center items-center z-[150] backdrop-blur-sm">
+                    <div className="bg-[#333] p-6 rounded-xl w-[400px] border border-blue-500 shadow-2xl">
+                        <h2 className="text-lg font-bold mb-4 text-white">📱 안드로이드 폰 연결 설정</h2>
+                        <p className="text-xs text-gray-400 mb-4 leading-relaxed">
+                            1. 폰에서 'SMS 게이트웨이' 앱 실행<br />
+                            2. 표시된 <b>FCM Token</b> 문자열을 복사하여 아래 붙여넣기
+                        </p>
+                        <textarea
+                            className="w-full h-24 bg-[#1a1a1a] border border-gray-600 rounded p-3 text-xs text-blue-400 font-mono mb-4 outline-none focus:border-blue-500"
+                            placeholder="FCM 토큰을 붙여넣으세요..."
+                            value={tempToken}
+                            onChange={e => setTempToken(e.target.value)}
+                        />
+                        <div className="flex gap-2">
+                            <button onClick={() => setShowTokenModal(false)} className="flex-1 bg-gray-600 py-3 rounded-lg font-bold text-xs">취소</button>
+                            <button onClick={handleUpdateToken} className="flex-1 bg-blue-600 hover:bg-blue-500 py-3 rounded-lg font-bold text-white text-xs">기기 연결하기</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* 💬 우측 채팅 사이드바 */}
+            <div className={`fixed top-0 right-0 h-full w-[350px] bg-[#bacee0] shadow-2xl z-[150] transform transition-transform duration-300 flex flex-col ${isChatOpen ? 'translate-x-0' : 'translate-x-full'}`}>
+
+                {/* 상단바 */}
+                <div className="bg-[#a9bdce] p-4 flex justify-between items-center border-b border-gray-400/30">
+                    <h2 className="font-bold text-gray-800">🚀 홍보 링크 발송</h2>
+                    <button onClick={() => setIsChatOpen(false)} className="text-xl text-gray-600 hover:text-black">✕</button>
+                </div>
+
+                {/* 번호 입력 영역 */}
+                <div className="p-4 bg-white/50 border-b border-gray-400/20">
+                    <label className="block text-[11px] font-bold text-gray-500 mb-1">대상 번호</label>
+                    <div className="flex gap-2">
+                        <input
+                            type="text"
+                            className="flex-1 bg-white border border-gray-300 rounded-lg px-3 py-2 text-sm text-black outline-none focus:ring-2 focus:ring-blue-400"
+                            placeholder="010-0000-0000"
+                            value={chatInputNumber}
+                            onChange={(e) => setChatInputNumber(e.target.value)}
+                        />
+                        <button
+                            onClick={handleSendPromoChat}
+                            disabled={isSending}
+                            className="bg-yellow-400 hover:bg-yellow-500 text-black px-4 py-2 rounded-lg font-bold text-xs shadow-sm transition"
+                        >
+                            {isSending ? "..." : "발송"}
+                        </button>
+                    </div>
+                </div>
+
+                {/* 채팅 내역 영역 (미리보기) */}
+                <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+                    <div className="text-center">
+                        <span className="text-[10px] bg-black/10 text-gray-600 px-3 py-1 rounded-full">
+                            {new Date().toLocaleDateString()}
+                        </span>
+                    </div>
+
+                    {/* 안내 문구 (말풍선 예시) */}
+                    <div className="flex justify-start">
+                        <div className="bg-white text-black p-3 rounded-xl rounded-tl-none text-xs max-w-[80%] shadow-sm leading-relaxed">
+                            번호를 입력하고 발송을 누르면,<br />
+                            <b>내 홍보 링크</b>가 담긴 문자가 즉시 전송됩니다.
+                        </div>
+                    </div>
+
+                    {/* 전송 후 실제 로그가 여기에 쌓임 (기능 연결 후) */}
+                </div>
+
+                {/* 하단 입력창 (답장용) */}
+                <div className="p-3 bg-white flex flex-col gap-2">
+                    <textarea
+                        className="w-full h-20 border-none outline-none text-sm text-black resize-none"
+                        placeholder="메시지를 입력하세요..."
+                    />
+                    <div className="flex justify-end">
+                        <button className="bg-gray-200 text-gray-500 px-4 py-1.5 rounded font-bold text-xs cursor-not-allowed">전송</button>
+                    </div>
+                </div>
+            </div>
+
 
             {showUploadModal && <div className="fixed inset-0 bg-black bg-opacity-70 flex justify-center items-center backdrop-blur-sm z-50"><div className="bg-[#383838] p-6 rounded-xl w-[600px] border border-gray-600 text-white"><h2 className="text-xl font-bold mb-4">📤 엑셀 복사 등록</h2><textarea placeholder="붙여넣기..." className="w-full h-40 bg-[#2b2b2b] p-3 rounded border border-gray-600 text-sm font-mono mb-4 text-white" value={pasteData} onChange={handlePaste} /><div className="flex justify-end gap-2"><button onClick={() => setShowUploadModal(false)} className="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded">취소</button><button onClick={handleBulkSubmit} className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded font-bold">등록하기</button></div></div></div>}
         </div>
