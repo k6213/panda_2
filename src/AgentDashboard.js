@@ -107,14 +107,19 @@ const autoResizeTextarea = (e) => {
 // ==================================================================================
 // 3. 팝업 컴포넌트
 // ==================================================================================
+// ==================================================================================
+// 3. 팝업 컴포넌트 (스타일 복사 로직 강화)
+// ==================================================================================
 const PopoutWindow = ({ title, onClose, children }) => {
     const [containerEl, setContainerEl] = useState(null);
     const externalWindow = useRef(null);
 
     useEffect(() => {
+        // 이미 창이 열려있지 않다면 새로 엽니다.
         if (!externalWindow.current || externalWindow.current.closed) {
             externalWindow.current = window.open("", "", "width=1000,height=800,left=200,top=100,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes");
         }
+
         const win = externalWindow.current;
 
         if (!win) {
@@ -123,6 +128,7 @@ const PopoutWindow = ({ title, onClose, children }) => {
             return;
         }
 
+        // 1. 기본 HTML 구조 작성
         try {
             win.document.open();
             win.document.write(`
@@ -134,8 +140,7 @@ const PopoutWindow = ({ title, onClose, children }) => {
                     <style>
                         body { margin: 0; padding: 0; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
                         #popout-root { height: 100vh; overflow: auto; }
-                        
-                        /* 팝업창 내부 스크롤바 숨김 */
+                        /* 스크롤바 숨김 처리 */
                         ::-webkit-scrollbar { display: none; }
                         * { -ms-overflow-style: none; scrollbar-width: none; }
                     </style>
@@ -150,15 +155,28 @@ const PopoutWindow = ({ title, onClose, children }) => {
             console.error("Popup Write Error:", e);
         }
 
+        // ⭐️ [핵심 수정] 부모 창의 모든 스타일(Tailwind 포함)을 새 창으로 복사
+        // 1) <link rel="stylesheet"> 복사
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(node => {
+            win.document.head.appendChild(node.cloneNode(true));
+        });
+        // 2) <style> 태그 복사
+        document.querySelectorAll('style').forEach(node => {
+            win.document.head.appendChild(node.cloneNode(true));
+        });
+
+        // 3) Tailwind CDN 강제 주입 (부모 창에서 복사가 안 될 경우를 대비한 안전장치)
         const script = win.document.createElement('script');
         script.src = "https://cdn.tailwindcss.com";
         win.document.head.appendChild(script);
 
+        // 컨테이너 설정 (React Portal 타겟)
         setTimeout(() => {
             const container = win.document.getElementById('popout-root');
             setContainerEl(container);
         }, 100);
 
+        // 팝업이 닫혔는지 감시
         const timer = setInterval(() => {
             if (win.closed) {
                 clearInterval(timer);
@@ -166,6 +184,7 @@ const PopoutWindow = ({ title, onClose, children }) => {
             }
         }, 500);
 
+        // 컴포넌트 언마운트 시 팝업 닫기
         return () => {
             clearInterval(timer);
             if (win && !win.closed) {
@@ -194,6 +213,11 @@ function AgentDashboard({ user, onLogout }) {
     const [periodFilter, setPeriodFilter] = useState('month');
     const [agents, setAgents] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
+
+
+    const [showFailModal, setShowFailModal] = useState(false);
+    const [failTarget, setFailTarget] = useState(null);
+    const [selectedFailReason, setSelectedFailReason] = useState('');
 
     // 설정 관련 State
     const [adChannels, setAdChannels] = useState([]);
@@ -425,16 +449,31 @@ function AgentDashboard({ user, onLogout }) {
 
     const loadCurrentTabData = useCallback(() => {
         setSelectedIds([]);
+
         if (activeTab === 'report') {
             fetchStatistics();
         } else if (activeTab === 'policy') {
             fetchNoticesAndPolicies();
         } else {
+            // 일반 탭(상담관리, 접수관리, 공유DB 등) 데이터 로드
             fetchAllData();
             fetchAgents();
-            if (activeTab === 'issue_manage') fetch(`${API_BASE}/api/failure_reasons/`, { headers: getAuthHeaders() }).then(res => res.json()).then(setReasons);
-            if (activeTab === 'settlement') fetch(`${API_BASE}/api/settlement_statuses/`, { headers: getAuthHeaders() }).then(res => res.json()).then(setSettlementStatuses);
-            if (activeTab === 'settings') fetchSettings();
+
+            // 🟢 [수정됨] 실패 사유(reasons)를 항상 불러오도록 변경
+            // (기존에는 issue_manage 탭 안에만 있어서 상담관리 탭에서는 목록이 비어있었음)
+            fetch(`${API_BASE}/api/failure_reasons/`, { headers: getAuthHeaders() })
+                .then(res => res.json())
+                .then(setReasons);
+
+            // 탭별 추가 데이터 로드
+            if (activeTab === 'settlement') {
+                fetch(`${API_BASE}/api/settlement_statuses/`, { headers: getAuthHeaders() })
+                    .then(res => res.json())
+                    .then(setSettlementStatuses);
+            }
+            if (activeTab === 'settings') {
+                fetchSettings();
+            }
 
             fetchNoticesAndPolicies();
         }
@@ -468,7 +507,8 @@ function AgentDashboard({ user, onLogout }) {
 
     // ⭐️ [중요] 변수 선언 순서 수정 (displayedData, realTimeStats에서 사용하기 위해 먼저 선언)
     const { consultDB, longTermDB, salesDB } = useMemo(() => {
-        let consult = myAllCustomers.filter(c => !['설치완료', '해지진행', '접수취소', '장기가망'].includes(c.status));
+        // 🟢 ['접수완료']를 추가하여, 접수가 완료되면 상담 목록에서 사라지게 함
+        let consult = myAllCustomers.filter(c => !['설치완료', '해지진행', '접수취소', '장기가망', '접수완료'].includes(c.status));
         let longTerm = myAllCustomers.filter(c => c.status === '장기가망');
         let sales = myAllCustomers.filter(c => c.status === '접수완료');
 
@@ -615,11 +655,19 @@ function AgentDashboard({ user, onLogout }) {
 
 
     // ⭐️ [통계] 데이터 가공 로직
+    // ⭐️ [수정] 하단 통계 지표 (선택된 상담사 기준 계산)
     const dashboardStats = useMemo(() => {
-        // ✅ 수정: 데이터가 없어도 기본 0으로 계산되도록 로직 변경 (null 리턴 제거)
         const currentStats = serverStats || [];
-        let targetStats = currentStats.filter(s => String(s.id) === String(currentUserId));
 
+        // 🔴 [핵심 수정] 로그인한 사람이 아니라, '선택된 상담사' 기준으로 필터링
+        let targetStats = currentStats;
+
+        if (selectedStatAgent !== 'ALL') {
+            // 특정 상담사를 선택했다면 그 사람 데이터만 남김
+            targetStats = currentStats.filter(s => String(s.id) === String(selectedStatAgent));
+        }
+
+        // --- 이하 계산 로직은 기존과 동일 ---
         const totalDB = targetStats.reduce((acc, s) => acc + safeParseInt(s.db), 0);
         const acceptedCount = targetStats.reduce((acc, s) => acc + safeParseInt(s.accepted), 0);
         const acceptedRevenue = targetStats.reduce((acc, s) => acc + safeParseInt(s.acceptedRevenue), 0);
@@ -627,26 +675,34 @@ function AgentDashboard({ user, onLogout }) {
         const installCount = targetStats.reduce((acc, s) => acc + safeParseInt(s.installed), 0);
         const cancelCount = targetStats.reduce((acc, s) => acc + safeParseInt(s.canceled), 0);
 
+        // 🟢 서버에서 계산된 adSpend 사용
+        const adSpend = targetStats.reduce((acc, s) => acc + safeParseInt(s.adSpend), 0);
+
+        const netProfit = installedRevenue - adSpend;
         const acceptRate = totalDB > 0 ? ((acceptedCount / totalDB) * 100).toFixed(1) : 0;
         const cancelRate = (acceptedCount + cancelCount) > 0 ? ((cancelCount / (acceptedCount + cancelCount)) * 100).toFixed(1) : 0;
-        const netInstallRate = acceptedCount > 0 ? ((installCount / acceptedCount) * 100).toFixed(1) : 0;
-        const avgMargin = acceptedCount > 0 ? Math.round(acceptedRevenue / acceptedCount) : 0;
 
-        const currentMonthKey = statDate.substring(0, 7);
-        const totalAdSpendInput = safeParseInt(monthlyAdSpends[currentMonthKey]);
-        let finalAdSpend = totalAdSpendInput;
+        return { totalDB, acceptedCount, acceptRate, acceptedRevenue, installedRevenue, installCount, cancelRate, netProfit, adSpend };
+    }, [serverStats, selectedStatAgent]); // 👈 의존성 배열에 selectedStatAgent 추가됨
 
-        const netProfit = installedRevenue - finalAdSpend;
-        return { totalDB, acceptedCount, acceptRate, acceptedRevenue, installedRevenue, installCount, cancelRate, netInstallRate, avgMargin, netProfit, adSpend: finalAdSpend };
-    }, [serverStats, monthlyAdSpends, currentUserId, statDate]);
-
-    // ⭐️ [통계] 상세 테이블 데이터 가공 (순이익율 추가)
+    // ⭐️ [수정] 통계 상세 테이블 데이터 (전체 상담사 표시)
+    // ⭐️ [수정 1] 통계 상세 데이터 가공 (전체 상담사 표시로 변경)
+    // ⭐️ [수정 1] 통계 상세 테이블 데이터 가공 (전체 상담사 표시로 변경)
+    // ⭐️ [수정] 통계 상세 테이블 데이터 가공 (전체 상담사 표시 + 광고비 자동분배)
     const agentStats = useMemo(() => {
         if (!serverStats) return [];
+
         const currentMonthKey = statDate.substring(0, 7);
+        // 월별 설정된 총 광고비 (없으면 0)
         const totalAdSpend = safeParseInt(monthlyAdSpends[currentMonthKey]);
-        const myStats = serverStats.filter(s => String(s.id) === String(currentUserId));
-        return myStats.map(s => {
+
+        // 🔴 [핵심] 필터링 제거! (내 것만 보기 -> 전체 보기)
+        const targetStats = serverStats.filter(s => s.id !== 'unknown');
+
+        // 전체 DB 합계 계산 (광고비 분배 기준)
+        const totalDBAllAgents = targetStats.reduce((acc, s) => acc + safeParseInt(s.db), 0);
+
+        return targetStats.map(s => {
             const sTotalDB = safeParseInt(s.db);
             const sAccepted = safeParseInt(s.accepted);
             const sInstalled = safeParseInt(s.installed);
@@ -654,14 +710,16 @@ function AgentDashboard({ user, onLogout }) {
             const sAcceptedRev = safeParseInt(s.acceptedRevenue);
             const sInstalledRev = safeParseInt(s.installedRevenue);
 
-            const adSpend = totalAdSpend;
+            // 🟢 광고비 자동 분배 로직 (전체 DB 중 내 DB 비중 * 총 광고비)
+            const adSpend = totalDBAllAgents > 0 ? Math.round(totalAdSpend * (sTotalDB / totalDBAllAgents)) : 0;
+
             const netProfit = sInstalledRev - adSpend;
             const acceptRate = sTotalDB > 0 ? ((sAccepted / sTotalDB) * 100).toFixed(1) : 0;
             const cancelRate = (sAccepted + sCanceled) > 0 ? ((sCanceled / (sAccepted + sCanceled)) * 100).toFixed(1) : 0;
             const netInstallRate = sAccepted > 0 ? ((sInstalled / sAccepted) * 100).toFixed(1) : 0;
             const avgMargin = sAccepted > 0 ? Math.round(sAcceptedRev / sAccepted) : 0;
 
-            // ⭐️ 순이익율 계산: 순이익 / (접수매출 + 설치매출) * 100
+            // 순이익율 계산
             const totalRevenue = sAcceptedRev + sInstalledRev;
             const netProfitMargin = totalRevenue > 0 ? ((netProfit / totalRevenue) * 100).toFixed(1) : 0;
 
@@ -673,14 +731,14 @@ function AgentDashboard({ user, onLogout }) {
                 const pAcceptedRev = safeParseInt(p.acceptedRevenue);
                 const pInstalledRev = safeParseInt(p.installedRevenue);
 
+                // 플랫폼별 광고비 분배
                 const pAdSpend = sTotalDB > 0 ? Math.round(adSpend * (pDB / sTotalDB)) : 0;
                 const pNetProfit = pInstalledRev - pAdSpend;
+
                 const pAcceptRate = pDB > 0 ? ((pAccepted / pDB) * 100).toFixed(1) : 0;
                 const pCancelRate = (pAccepted + pCanceled) > 0 ? ((pCanceled / (pAccepted + pCanceled)) * 100).toFixed(1) : 0;
                 const pNetInstallRate = pAccepted > 0 ? ((pInstalled / pAccepted) * 100).toFixed(1) : 0;
                 const pAvgMargin = pAccepted > 0 ? Math.round(pAcceptedRev / pAccepted) : 0;
-
-                // 플랫폼별 순이익율
                 const pTotalRevenue = pAcceptedRev + pInstalledRev;
                 const pNetProfitMargin = pTotalRevenue > 0 ? ((pNetProfit / pTotalRevenue) * 100).toFixed(1) : 0;
 
@@ -695,8 +753,10 @@ function AgentDashboard({ user, onLogout }) {
                     netProfitMargin: pNetProfitMargin
                 };
             });
+
             return {
-                ...s, db: sTotalDB, accepted: sAccepted, installed: sInstalled, canceled: sCanceled,
+                ...s,
+                db: sTotalDB, accepted: sAccepted, installed: sInstalled, canceled: sCanceled,
                 acceptedRevenue: sAcceptedRev, installedRevenue: sInstalledRev,
                 adSpend, netProfit, acceptRate, cancelRate, netInstallRate, avgMargin,
                 netProfitMargin, platformDetails
@@ -732,9 +792,134 @@ function AgentDashboard({ user, onLogout }) {
     const handleAdSpendChange = (value) => { const cleanValue = value.replace(/[^0-9]/g, ''); const currentMonthKey = statDate.substring(0, 7); setMonthlyAdSpends(prev => ({ ...prev, [currentMonthKey]: cleanValue })); setAdSpend(cleanValue); };
     const handleToggleAlarm = (e, customer) => { e.stopPropagation(); const currentList = parseChecklist(customer.checklist); const isAlarmOn = currentList.includes('알림ON'); const newList = isAlarmOn ? currentList.filter(item => item !== '알림ON') : [...currentList, '알림ON']; handleInlineUpdate(customer.id, 'checklist', newList.join(',')); };
     const handleCallbackChange = (customer, type, val) => { let current = customer.callback_schedule ? new Date(customer.callback_schedule) : new Date(); if (isNaN(current.getTime())) { current = new Date(); current.setHours(9, 0, 0, 0); } let y = current.getFullYear(); let m = current.getMonth() + 1; let d = current.getDate(); let h = current.getHours(); if (type === 'year') y = parseInt(val) || y; if (type === 'month') m = parseInt(val) || m; if (type === 'day') d = parseInt(val) || d; if (type === 'hour') h = parseInt(val) || h; const newDate = new Date(y, m - 1, d, h); const yy = newDate.getFullYear(); const mm = String(newDate.getMonth() + 1).padStart(2, '0'); const dd = String(newDate.getDate()).padStart(2, '0'); const hh = String(newDate.getHours()).padStart(2, '0'); handleInlineUpdate(customer.id, 'callback_schedule', `${yy}-${mm}-${dd}T${hh}:00:00`); };
-    const handleStatusChangeRequest = async (id, newStatus) => { if (newStatus === '접수완료') { const target = allCustomers.find(c => c.id === id); setCompletionTarget(target); const templates = config?.form_templates || []; const initPlatform = templates.length > 0 ? templates[0].name : 'KT'; setSelectedPlatform(target.platform || initPlatform); setDynamicFormData({}); setCalculatedPolicy(0); setShowCompletionModal(true); return; } else if (newStatus === '실패이관') { try { await fetch(`${API_BASE}/api/customers/${id}/add_log/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ user_id: user.user_id, content: `[시스템] 빠른 실패이관 처리` }) }); await fetch(`${API_BASE}/api/customers/${id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify({ status: '실패이관', owner: null }) }); loadCurrentTabData(); } catch (err) { console.error(err); } return; } handleInlineUpdate(id, 'status', newStatus); };
+    // 상태 변경 요청 핸들러
+    // -----------------------------------------------------------
+    // 1. 상태 변경 요청 핸들러 (수정됨: 함수 밖으로 로직 분리)
+    // -----------------------------------------------------------
+    const handleStatusChangeRequest = async (id, newStatus) => {
+        // (1) 접수완료 처리
+        if (newStatus === '접수완료') {
+            const target = allCustomers.find(c => c.id === id);
+            setCompletionTarget(target);
+            setSelectedPlatform(target.platform || 'KT');
+            setDynamicFormData({});
+            setCalculatedPolicy(0);
+            setShowCompletionModal(true);
+            return;
+        }
+
+        // (2) 실패 처리 (모달 열기)
+        else if (newStatus === '실패') {
+            const target = allCustomers.find(c => c.id === id);
+            setFailTarget(target);
+            setSelectedFailReason('');
+            setShowFailModal(true);
+            return;
+        }
+
+        // (3) 실패이관 처리
+        else if (newStatus === '실패이관') {
+            try {
+                await fetch(`${API_BASE}/api/customers/${id}/add_log/`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ user_id: user.user_id, content: `[시스템] 빠른 실패이관 처리` })
+                });
+                await fetch(`${API_BASE}/api/customers/${id}/`, {
+                    method: 'PATCH',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ status: '실패이관', owner: null })
+                });
+                loadCurrentTabData();
+                alert("실패 DB로 이관되었습니다.");
+            } catch (err) { console.error(err); }
+            return;
+        }
+
+        // (4) 그 외 상태 변경
+        handleInlineUpdate(id, 'status', newStatus);
+    };
+
+    // -----------------------------------------------------------
+    // 2. [추가됨] 실패 확정 핸들러 (반드시 handleStatusChangeRequest 밖, 메인 컴포넌트 바로 아래에 있어야 함)
+    // -----------------------------------------------------------
+    const handleConfirmFail = () => {
+        if (!failTarget) return;
+        if (!selectedFailReason) return alert("❌ 실패 사유를 선택해주세요.");
+
+        fetch(`${API_BASE}/api/customers/${failTarget.id}/`, {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+                status: '실패',
+                detail_reason: selectedFailReason
+            })
+        })
+            .then(() => {
+                alert("처리되었습니다.");
+
+                // 로컬 데이터 즉시 업데이트 (화면 갱신)
+                setAllCustomers(prev => prev.map(c =>
+                    c.id === failTarget.id
+                        ? { ...c, status: '실패', detail_reason: selectedFailReason }
+                        : c
+                ));
+
+                setShowFailModal(false);
+                setFailTarget(null);
+
+                // 실패 시 탭 이동을 원치 않으면 이 줄은 주석 유지
+                // setActiveTab('issue_manage'); 
+            })
+            .catch(err => alert("오류 발생: " + err));
+    };
     const handleFormDataChange = (key, value, optionPolicies = null) => { const newData = { ...dynamicFormData, [key]: value }; setDynamicFormData(newData); let totalPolicy = 0; if (optionPolicies && optionPolicies[value]) { const templates = config?.form_templates || []; const template = templates.find(t => t.name === selectedPlatform || t.id === selectedPlatform); if (template && template.fields) { template.fields.forEach(field => { const selectedVal = (field.id === key) ? value : newData[field.id]; if (selectedVal && field.policies && field.policies[selectedVal]) totalPolicy += field.policies[selectedVal]; }); } } else { const currentData = policyData[selectedPlatform]; if (currentData) { [...currentData.internet, ...currentData.bundle, ...currentData.addon].forEach(p => { if (p.name === value) totalPolicy += safeParseInt(p.policy || p.cost); }); } } if (totalPolicy > 0) setCalculatedPolicy(totalPolicy); };
-    const handleConfirmCompletion = () => { if (!completionTarget) return; const finalProductInfo = `[${selectedPlatform}] ` + Object.entries(dynamicFormData).map(([k, v]) => `${k}:${v}`).join(', '); const payload = { status: '접수완료', platform: selectedPlatform, product_info: finalProductInfo, agent_policy: calculatedPolicy, installed_date: null }; fetch(`${API_BASE}/api/customers/${completionTarget.id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify(payload) }).then(() => { const logContent = `[시스템 자동접수]\n통신사: ${selectedPlatform}\n상품내역: ${finalProductInfo}\n예상 정책금: ${calculatedPolicy}만원`; return fetch(`${API_BASE}/api/customers/${completionTarget.id}/add_log/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ user_id: user.user_id, content: logContent }) }); }).then(() => { alert("🎉 접수가 완료되었습니다!"); setShowCompletionModal(false); setCompletionTarget(null); loadCurrentTabData(); setActiveTab('reception'); }).catch(err => alert("오류 발생: " + err)); };
+    const handleConfirmCompletion = () => {
+        if (!completionTarget) return;
+
+        // 저장할 데이터 구성
+        const finalProductInfo = `[${selectedPlatform}] ` + Object.entries(dynamicFormData).map(([k, v]) => `${k}:${v}`).join(', ');
+        const payload = {
+            status: '접수완료',
+            platform: selectedPlatform,
+            product_info: finalProductInfo,
+            agent_policy: calculatedPolicy,
+            installed_date: null
+        };
+
+        // 1. 서버 전송
+        fetch(`${API_BASE}/api/customers/${completionTarget.id}/`, {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(payload)
+        })
+            .then(() => {
+                // 2. 로그 저장
+                const logContent = `[시스템 자동접수]\n통신사: ${selectedPlatform}\n상품내역: ${finalProductInfo}\n예상 정책금: ${calculatedPolicy}만원`;
+                return fetch(`${API_BASE}/api/customers/${completionTarget.id}/add_log/`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ user_id: user.user_id, content: logContent })
+                });
+            })
+            .then(() => {
+                alert("🎉 접수가 완료되었습니다!");
+
+                // ⭐️ [핵심 수정] 로컬 데이터 즉시 업데이트 (이 코드가 있어야 화면에서 바로 사라짐)
+                setAllCustomers(prev => prev.map(c =>
+                    c.id === completionTarget.id
+                        ? { ...c, ...payload } // 변경된 상태(접수완료)와 정보를 즉시 반영
+                        : c
+                ));
+
+                setShowCompletionModal(false);
+                setCompletionTarget(null);
+
+                // 4. 탭 이동
+                setActiveTab('reception');
+            })
+            .catch(err => alert("오류 발생: " + err));
+    };
     const handleOpenChatGlobal = () => { setChatView('LIST'); setIsChatOpen(!isChatOpen); };
     const enterChatRoom = (c) => { setChatTarget(c); setChatView('ROOM'); setChatMessages([]); fetchChatHistory(c.id); };
     const backToChatList = () => { setChatView('LIST'); setChatTarget(null); setChatMessages([]); };
@@ -918,69 +1103,159 @@ function AgentDashboard({ user, onLogout }) {
                     </div>
                 )}
 
-                {/* ⭐️ [신규] 통계 탭 UI (AdminDashboard와 동일 로직) */}
+                {/* 5. 통계 탭 전체 영역 */}
                 {activeTab === 'report' && dashboardStats && (
-                    <div className="animate-fade-in space-y-6">
+                    <div className="space-y-6 animate-fade-in">
+
+                        {/* 🟢 (1) 상단 컨트롤 바: 날짜, 플랫폼, 상담사 선택, 설정 버튼 */}
                         <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-gray-50 rounded-xl border border-gray-200 shadow-sm">
-                            <div className="flex items-center gap-3">
+
+                            {/* 왼쪽: 날짜 및 플랫폼 필터 */}
+                            <div className="flex items-center gap-2">
                                 <div className="flex bg-white rounded-lg border border-gray-300 overflow-hidden p-1">
                                     <button
-                                        onClick={() => {
-                                            setStatPeriodType('month');
-                                            // ⭐️ 월별 포맷 (YYYY-MM)
-                                            setStatDate(new Date().toISOString().substring(0, 7));
-                                        }}
-                                        className={`px-4 py-1.5 rounded-md text-xs font-bold transition ${statPeriodType === 'month' ? 'bg-indigo-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'}`}
+                                        onClick={() => setStatPeriodType('month')}
+                                        className={`px-3 py-1.5 text-xs font-bold rounded transition ${statPeriodType === 'month' ? 'bg-indigo-600 text-white' : 'hover:bg-gray-100'}`}
                                     >
                                         월별
                                     </button>
                                     <button
-                                        onClick={() => {
-                                            setStatPeriodType('day');
-                                            // ⭐️ [중요] 일별 클릭 시 오늘 날짜(로컬 시간)로 강제 설정하여 데이터 바로 조회되게 함
-                                            const now = new Date();
-                                            const year = now.getFullYear();
-                                            const month = String(now.getMonth() + 1).padStart(2, '0');
-                                            const day = String(now.getDate()).padStart(2, '0');
-                                            const todayLocal = `${year}-${month}-${day}`;
-                                            setStatDate(todayLocal);
-                                        }}
-                                        className={`px-4 py-1.5 rounded-md text-xs font-bold transition ${statPeriodType === 'day' ? 'bg-indigo-600 text-white shadow' : 'text-gray-500 hover:bg-gray-100'}`}
+                                        onClick={() => { setStatPeriodType('day'); setStatDate(new Date().toISOString().split('T')[0]); }}
+                                        className={`px-3 py-1.5 text-xs font-bold rounded transition ${statPeriodType === 'day' ? 'bg-indigo-600 text-white' : 'hover:bg-gray-100'}`}
                                     >
                                         일별
                                     </button>
                                 </div>
+
                                 <input
                                     type={statPeriodType === 'month' ? 'month' : 'date'}
                                     className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-bold text-gray-700 outline-none focus:border-indigo-500"
-                                    // ⭐️ [핵심 수정] value 형식 불일치 경고 방지
-                                    value={
-                                        statPeriodType === 'month'
-                                            ? (statDate.length > 7 ? statDate.substring(0, 7) : statDate)
-                                            : (statDate.length === 7 ? `${statDate}-01` : statDate)
-                                    }
+                                    value={statPeriodType === 'month' ? (statDate.length > 7 ? statDate.substring(0, 7) : statDate) : (statDate.length === 7 ? `${statDate}-01` : statDate)}
                                     onChange={(e) => setStatDate(e.target.value)}
                                 />
-                                <select className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-bold text-gray-700 outline-none focus:border-indigo-500" value={statPlatform} onChange={(e) => setStatPlatform(e.target.value)}>
+
+                                <select
+                                    className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-bold text-gray-700 outline-none focus:border-indigo-500"
+                                    value={statPlatform}
+                                    onChange={(e) => setStatPlatform(e.target.value)}
+                                >
                                     <option value="ALL">전체 플랫폼</option>
                                     {config.report_platform_filters?.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
                                 </select>
                             </div>
+
+                            {/* 🟢 오른쪽: 상담사 선택 (스크롤 박스) + 커스터마이징 버튼 */}
+                            <div className="flex items-center gap-2">
+                                <select
+                                    className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-bold text-indigo-700 outline-none focus:border-indigo-500 shadow-sm cursor-pointer"
+                                    value={selectedStatAgent}
+                                    onChange={(e) => setSelectedStatAgent(e.target.value)}
+                                >
+                                    <option value="ALL">👥 전체 상담사 합계</option>
+                                    {/* 미배정(unknown)을 제외한 상담사 목록 표시 */}
+                                    {serverStats && serverStats.filter(s => s.id !== 'unknown').map(agent => (
+                                        <option key={agent.id} value={agent.id}>
+                                            {String(agent.id) === String(currentUserId) ? `👤 ${agent.name} (나)` : `👤 ${agent.name}`}
+                                        </option>
+                                    ))}
+                                </select>
+
+                                <button
+                                    onClick={() => setShowCustomModal(true)}
+                                    className="bg-white border border-gray-300 text-gray-500 p-1.5 rounded-lg hover:bg-gray-100 hover:text-indigo-600 transition shadow-sm"
+                                    title="통계 화면 설정"
+                                >
+                                    ⚙️
+                                </button>
+                            </div>
                         </div>
 
-                        {/* 핵심 지표 카드 */}
+                        {/* (2) 핵심 지표 카드 (dashboardStats 데이터 표시) */}
                         <div className="grid grid-cols-4 gap-4">
-                            {visibleCards.totalDB && <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-md flex flex-col justify-between"><div className="text-gray-500 text-xs font-bold mb-1">총 유입 DB</div><div className="text-3xl font-extrabold text-gray-800">{dashboardStats.totalDB.toLocaleString()} <span className="text-sm font-normal text-gray-400">건</span></div></div>}
-                            {visibleCards.acceptedCount && <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-md flex flex-col justify-between"><div className="text-indigo-500 text-xs font-bold mb-1">총 접수 건수</div><div className="text-3xl font-extrabold text-indigo-600">{dashboardStats.acceptedCount.toLocaleString()} <span className="text-sm font-normal text-gray-400">건</span></div></div>}
-                            {visibleCards.installCount && <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-md flex flex-col justify-between"><div className="text-green-500 text-xs font-bold mb-1">설치 완료</div><div className="text-3xl font-extrabold text-green-600">{dashboardStats.installCount.toLocaleString()} <span className="text-sm font-normal text-gray-400">건</span></div></div>}
-                            {visibleCards.adSpend && <div className="bg-white p-5 rounded-2xl border border-red-100 shadow-md flex flex-col justify-between relative group"><div className="text-red-500 text-xs font-bold mb-1">나의 광고비 (입력)</div><input type="text" className="text-3xl font-extrabold text-red-600 bg-transparent outline-none w-full placeholder-red-200" placeholder="0" value={adSpend ? parseInt(adSpend).toLocaleString() : ''} onChange={(e) => handleAdSpendChange(e.target.value)} /><span className="text-[10px] text-gray-400 absolute bottom-2 right-4 opacity-0 group-hover:opacity-100 transition">클릭하여 수정</span></div>}
-                            {visibleCards.acceptedRevenue && <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-md flex flex-col justify-between"><div className="text-blue-500 text-xs font-bold mb-1">접수 매출 (예상)</div><div className="text-2xl font-extrabold text-blue-600">{dashboardStats.acceptedRevenue.toLocaleString()} <span className="text-sm font-normal text-gray-400">원</span></div></div>}
-                            {visibleCards.installedRevenue && <div className="bg-white p-5 rounded-2xl border border-gray-100 shadow-md flex flex-col justify-between"><div className="text-emerald-500 text-xs font-bold mb-1">설치 매출 (확정)</div><div className="text-2xl font-extrabold text-emerald-600">{dashboardStats.installedRevenue.toLocaleString()} <span className="text-sm font-normal text-gray-400">원</span></div></div>}
-                            {visibleCards.netProfit && <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-5 rounded-2xl shadow-lg flex flex-col justify-between text-white"><div className="text-indigo-100 text-xs font-bold mb-1">최종 순수익 (매출-광고비)</div><div className="text-3xl font-extrabold">{dashboardStats.netProfit.toLocaleString()} <span className="text-sm font-medium opacity-70">원</span></div></div>}
-                            <div className="bg-gray-50 p-5 rounded-2xl border border-gray-200 flex flex-col justify-around gap-2"><div className="flex justify-between items-center"><span className="text-xs font-bold text-gray-500">접수율</span><span className="text-sm font-extrabold text-gray-800">{dashboardStats.acceptRate}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.min(dashboardStats.acceptRate, 100)}%` }}></div></div><div className="flex justify-between items-center"><span className="text-xs font-bold text-gray-500">취소율</span><span className="text-sm font-extrabold text-red-500">{dashboardStats.cancelRate}%</span></div><div className="w-full bg-gray-200 rounded-full h-1.5"><div className="bg-red-500 h-1.5 rounded-full" style={{ width: `${Math.min(dashboardStats.cancelRate, 100)}%` }}></div></div></div>
+                            {visibleCards.totalDB && (
+                                <div className="bg-white p-5 border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-gray-500 mb-1">총 유입 DB</div>
+                                    <div className="text-3xl font-extrabold text-gray-800">
+                                        {dashboardStats.totalDB.toLocaleString()} <span className="text-sm font-normal text-gray-400">건</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.acceptedCount && (
+                                <div className="bg-white p-5 border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-indigo-500 mb-1">총 접수 건수</div>
+                                    <div className="text-3xl font-extrabold text-indigo-600">
+                                        {dashboardStats.acceptedCount.toLocaleString()} <span className="text-sm font-normal text-gray-400">건</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.installCount && (
+                                <div className="bg-white p-5 border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-green-500 mb-1">설치 완료</div>
+                                    <div className="text-3xl font-extrabold text-green-600">
+                                        {dashboardStats.installCount.toLocaleString()} <span className="text-sm font-normal text-gray-400">건</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.adSpend && (
+                                <div className="bg-white p-5 border border-red-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-red-500 mb-1">광고비 (자동계산)</div>
+                                    <div className="text-3xl font-extrabold text-red-600">
+                                        {formatCurrency(dashboardStats.adSpend)} <span className="text-sm font-normal text-gray-400">원</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.acceptedRevenue && (
+                                <div className="bg-white p-5 border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-blue-500 mb-1">접수 매출 (예상)</div>
+                                    <div className="text-2xl font-extrabold text-blue-600">
+                                        {formatCurrency(dashboardStats.acceptedRevenue)} <span className="text-sm font-normal text-gray-400">원</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.installedRevenue && (
+                                <div className="bg-white p-5 border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-emerald-500 mb-1">설치 매출 (확정)</div>
+                                    <div className="text-2xl font-extrabold text-emerald-600">
+                                        {formatCurrency(dashboardStats.installedRevenue)} <span className="text-sm font-normal text-gray-400">원</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.netProfit && (
+                                <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-5 rounded-2xl shadow-lg flex flex-col justify-between text-white">
+                                    <div className="text-xs font-bold text-indigo-100 mb-1">최종 순수익 (매출-광고비)</div>
+                                    <div className="text-3xl font-extrabold">
+                                        {formatCurrency(dashboardStats.netProfit)} <span className="text-sm font-medium opacity-70">원</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {(visibleCards.cancelRate || visibleCards.netInstallRate) && (
+                                <div className="bg-gray-50 p-5 rounded-2xl border border-gray-200 flex flex-col justify-around gap-2">
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs font-bold text-gray-500">접수율</span>
+                                        <span className="text-sm font-extrabold text-gray-800">{dashboardStats.acceptRate}%</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                                        <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.min(dashboardStats.acceptRate, 100)}%` }}></div>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs font-bold text-gray-500">취소율</span>
+                                        <span className="text-sm font-extrabold text-red-500">{dashboardStats.cancelRate}%</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                                        <div className="bg-red-500 h-1.5 rounded-full" style={{ width: `${Math.min(dashboardStats.cancelRate, 100)}%` }}></div>
+                                    </div>
+                                </div>
+                            )}
                         </div>
 
-                        {/* 상세 테이블 (상담사 본인 데이터) */}
+                        {/* (3) 상세 테이블 섹션 (전체 상담사 표시) */}
                         <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
                             <table className="w-full text-sm text-left">
                                 <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs tracking-wider border-b border-slate-200 sticky top-0 z-10">
@@ -998,7 +1273,6 @@ function AgentDashboard({ user, onLogout }) {
                                         <th className="px-4 py-3 text-right">취소율</th>
                                         <th className="px-4 py-3 text-right">순청약율</th>
                                         <th className="px-4 py-3 text-right">평균마진</th>
-                                        {/* ⭐️ 순이익율 컬럼 추가 */}
                                         <th className="px-4 py-3 text-right text-purple-600">순이익율</th>
                                         <th className="px-4 py-3 text-center">상세</th>
                                     </tr>
@@ -1007,7 +1281,9 @@ function AgentDashboard({ user, onLogout }) {
                                     {agentStats.map(agent => (
                                         <React.Fragment key={agent.id}>
                                             <tr className="border-b border-slate-100 hover:bg-slate-50 transition duration-150 font-bold text-gray-800">
-                                                <td className="px-4 py-3">{user.username} (나)</td>
+                                                <td className="px-4 py-3">
+                                                    {String(agent.id) === String(currentUserId) ? `${agent.name} (나)` : agent.name}
+                                                </td>
                                                 <td className="px-4 py-3 text-right">{agent.db}</td>
                                                 <td className="px-4 py-3 text-right text-blue-600">{agent.accepted}</td>
                                                 <td className="px-4 py-3 text-right text-green-600">{agent.installed}</td>
@@ -1020,22 +1296,18 @@ function AgentDashboard({ user, onLogout }) {
                                                 <td className="px-4 py-3 text-right">{agent.cancelRate}%</td>
                                                 <td className="px-4 py-3 text-right">{agent.netInstallRate}%</td>
                                                 <td className="px-4 py-3 text-right">{formatCurrency(agent.avgMargin)}</td>
-                                                {/* ⭐️ 순이익율 데이터 표시 */}
                                                 <td className="px-4 py-3 text-right text-purple-600">{agent.netProfitMargin}%</td>
                                                 <td className="px-4 py-3 text-center">
-                                                    <button
-                                                        onClick={() => toggleRow(agent.id)}
-                                                        className="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200 transition"
-                                                    >
+                                                    <button onClick={() => toggleRow(agent.id)} className="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200 transition">
                                                         {expandedRows.has(agent.id) ? '접기 ▲' : '플랫폼 ▼'}
                                                     </button>
                                                 </td>
                                             </tr>
                                             {expandedRows.has(agent.id) && (
                                                 <tr className="bg-gray-50">
-                                                    <td colSpan="15" className="p-4"> {/* colSpan 수정: 14 -> 15 */}
+                                                    <td colSpan="15" className="p-4">
                                                         <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-inner">
-                                                            <h4 className="text-xs font-bold text-gray-500 mb-2">📊 {user.username}님 - 플랫폼별 상세</h4>
+                                                            <h4 className="text-xs font-bold text-gray-500 mb-2">📊 {agent.name}님 - 플랫폼별 상세</h4>
                                                             <table className="w-full text-xs text-gray-600">
                                                                 <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs tracking-wider border-b border-slate-200">
                                                                     <tr>
@@ -1052,7 +1324,6 @@ function AgentDashboard({ user, onLogout }) {
                                                                         <th className="px-4 py-3 text-right">취소율</th>
                                                                         <th className="px-4 py-3 text-right">순청약율</th>
                                                                         <th className="px-4 py-3 text-right">평균마진</th>
-                                                                        {/* ⭐️ 순이익율 헤더 추가 */}
                                                                         <th className="px-4 py-3 text-right text-purple-600">순이익율</th>
                                                                     </tr>
                                                                 </thead>
@@ -1072,10 +1343,12 @@ function AgentDashboard({ user, onLogout }) {
                                                                             <td className="px-4 py-3 text-right">{pf.cancelRate}%</td>
                                                                             <td className="px-4 py-3 text-right">{pf.netInstallRate}%</td>
                                                                             <td className="px-4 py-3 text-right">{formatCurrency(pf.avgMargin)}</td>
-                                                                            {/* ⭐️ 순이익율 데이터 추가 */}
                                                                             <td className="px-4 py-3 text-right text-purple-600">{pf.netProfitMargin}%</td>
                                                                         </tr>
                                                                     ))}
+                                                                    {agent.platformDetails.length === 0 && (
+                                                                        <tr><td colSpan="14" className="text-center py-4">데이터가 없습니다.</td></tr>
+                                                                    )}
                                                                 </tbody>
                                                             </table>
                                                         </div>
@@ -1084,9 +1357,110 @@ function AgentDashboard({ user, onLogout }) {
                                             )}
                                         </React.Fragment>
                                     ))}
+                                    {agentStats.length === 0 && (
+                                        <tr><td colSpan="15" className="p-10 text-center text-gray-400">데이터가 없습니다.</td></tr>
+                                    )}
                                 </tbody>
                             </table>
                         </div>
+
+                        {/* 🟢 [수정됨] 통계 커스터마이징 모달 (사진과 동일한 UI) */}
+                        {showCustomModal && (
+                            <div className="fixed inset-0 bg-black/50 z-[9999] flex justify-center items-center backdrop-blur-sm animate-fade-in">
+                                <div className="bg-white p-8 rounded-2xl shadow-2xl w-[800px] max-h-[90vh] overflow-y-auto border border-gray-200">
+
+                                    {/* 헤더 */}
+                                    <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4">
+                                        <h3 className="font-extrabold text-2xl text-gray-800 flex items-center gap-2">
+                                            ⚙️ 통계 화면 설정
+                                        </h3>
+                                        <button
+                                            onClick={() => setShowCustomModal(false)}
+                                            className="text-gray-400 hover:text-gray-600 transition text-2xl"
+                                        >
+                                            ✕
+                                        </button>
+                                    </div>
+
+                                    {/* 1. 표시할 컬럼 설정 섹션 */}
+                                    <div className="mb-8">
+                                        <h4 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                            👁 표시할 컬럼
+                                        </h4>
+                                        <div className="grid grid-cols-3 gap-3">
+                                            {[
+                                                { k: 'owner_name', l: '담당자' }, { k: 'db', l: '디비' }, { k: 'accepted', l: '접수' },
+                                                { k: 'installed', l: '설치' }, { k: 'canceled', l: '취소' }, { k: 'adSpend', l: '광고비' },
+                                                { k: 'acceptedRevenue', l: '접수매출' }, { k: 'installedRevenue', l: '설치매출' }, { k: 'netProfit', l: '순이익' },
+                                                { k: 'acceptRate', l: '접수율' }, { k: 'cancelRate', l: '취소율' }, { k: 'netInstallRate', l: '순청약율' },
+                                                { k: 'avgMargin', l: '평균마진' }, { k: 'netProfitMargin', l: '순이익율' } // 순이익율 추가됨
+                                            ].map((item) => (
+                                                <label
+                                                    key={item.k}
+                                                    className={`flex items-center gap-3 p-3 rounded-lg border cursor-pointer transition select-none
+                                            ${visibleColumns[item.k]
+                                                            ? 'bg-blue-50 border-blue-200 text-blue-700'
+                                                            : 'bg-gray-50 border-transparent text-gray-500 hover:bg-gray-100'
+                                                        }`}
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={visibleColumns[item.k] || false}
+                                                        onChange={() => handleColumnToggle(item.k)}
+                                                        className="w-5 h-5 accent-blue-600 rounded"
+                                                    />
+                                                    <span className="text-sm font-bold">{item.l}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* 2. 표시할 지표 카드 설정 섹션 */}
+                                    <div className="mb-6">
+                                        <h4 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                            📊 표시할 지표 카드
+                                        </h4>
+                                        <div className="grid grid-cols-2 gap-3">
+                                            {[
+                                                { k: 'adSpend', l: '💰 총 광고비' }, { k: 'acceptedRevenue', l: '📑 접수완료매출' },
+                                                { k: 'installedRevenue', l: '✅ 설치완료매출' }, { k: 'netProfit', l: '🎯 순이익' },
+                                                { k: 'totalDB', l: '📊 총 디비건수' }, { k: 'acceptedCount', l: '📝 접수건수' },
+                                                { k: 'installCount', l: '✨ 설치건수' }, { k: 'acceptRate', l: '📈 접수율' },
+                                                { k: 'cancelRate', l: '⚠️ 취소율' }, { k: 'netInstallRate', l: '🎉 순청약율' }
+                                            ].map((item) => (
+                                                <label
+                                                    key={item.k}
+                                                    className={`flex items-center gap-3 p-4 rounded-lg border cursor-pointer transition select-none
+                                            ${visibleCards[item.k]
+                                                            ? 'bg-indigo-50 border-indigo-200 text-indigo-700'
+                                                            : 'bg-gray-50 border-transparent text-gray-500 hover:bg-gray-100'
+                                                        }`}
+                                                >
+                                                    <input
+                                                        type="checkbox"
+                                                        checked={visibleCards[item.k] || false}
+                                                        onChange={() => handleCardToggle(item.k)}
+                                                        className="w-5 h-5 accent-indigo-600 rounded"
+                                                    />
+                                                    <span className="text-sm font-bold">{item.l}</span>
+                                                </label>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* 하단 버튼 */}
+                                    <div className="flex justify-end pt-6 border-t border-gray-100 mt-4">
+                                        <button
+                                            onClick={() => setShowCustomModal(false)}
+                                            className="bg-indigo-600 text-white px-6 py-3 rounded-xl font-bold hover:bg-indigo-700 transition shadow-lg flex items-center gap-2"
+                                        >
+                                            <span>설정 저장 및 닫기</span>
+                                        </button>
+                                    </div>
+
+                                </div>
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -1611,6 +1985,55 @@ function AgentDashboard({ user, onLogout }) {
                         <div className="flex justify-end gap-2 mt-6">
                             <button onClick={() => setShowReferralModal(false)} className="px-4 py-2 bg-gray-100 rounded-lg text-sm font-bold text-gray-600 hover:bg-gray-200 transition">취소</button>
                             <button onClick={handleReferralSubmit} className="px-5 py-2 bg-emerald-500 rounded-lg text-sm font-bold text-white hover:bg-emerald-600 shadow-md transition">등록하기</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+
+            {/* 🔴 [추가] 실패 사유 선택 모달 */}
+            {showFailModal && failTarget && (
+                <div className="fixed inset-0 bg-black/50 z-[9999] flex justify-center items-center backdrop-blur-sm animate-fade-in">
+                    <div className="bg-white p-6 rounded-2xl w-96 border border-gray-200 shadow-2xl">
+                        <h3 className="text-xl font-bold text-red-600 mb-4 flex items-center gap-2">
+                            🚫 실패 처리
+                        </h3>
+
+                        <div className="bg-red-50 p-3 rounded-lg mb-4">
+                            <p className="text-sm text-gray-700 font-bold mb-1">{failTarget.name} 고객님</p>
+                            <p className="text-xs text-gray-500">실패 사유를 선택하면 'AS/실패' 탭으로 이동됩니다.</p>
+                        </div>
+
+                        <div className="mb-6">
+                            <label className="block text-sm font-bold text-gray-700 mb-2">실패 사유 선택</label>
+                            <select
+                                className="w-full p-3 border border-gray-300 rounded-xl outline-none focus:border-red-500 focus:ring-2 focus:ring-red-200 transition"
+                                value={selectedFailReason}
+                                onChange={(e) => setSelectedFailReason(e.target.value)}
+                            >
+                                <option value="">-- 사유를 선택하세요 --</option>
+                                {/* 관리자가 설정한 reasons 목록 맵핑 */}
+                                {reasons.map((r) => (
+                                    <option key={r.id} value={r.reason}>
+                                        {r.reason}
+                                    </option>
+                                ))}
+                            </select>
+                        </div>
+
+                        <div className="flex justify-end gap-2">
+                            <button
+                                onClick={() => { setShowFailModal(false); setFailTarget(null); }}
+                                className="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold hover:bg-gray-200 transition"
+                            >
+                                취소
+                            </button>
+                            <button
+                                onClick={handleConfirmFail}
+                                className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-md transition"
+                            >
+                                확인 및 저장
+                            </button>
                         </div>
                     </div>
                 </div>

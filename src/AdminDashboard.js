@@ -96,39 +96,99 @@ const autoResizeTextarea = (e) => {
 // ==================================================================================
 // 3. 팝업 컴포넌트
 // ==================================================================================
+// ==================================================================================
+// 3. 팝업 컴포넌트 (상담사 페이지와 동일 로직 적용)
+// ==================================================================================
 const PopoutWindow = ({ title, onClose, children }) => {
     const [containerEl, setContainerEl] = useState(null);
     const externalWindow = useRef(null);
 
     useEffect(() => {
+        // 이미 창이 열려있지 않다면 새로 엽니다.
         if (!externalWindow.current || externalWindow.current.closed) {
-            externalWindow.current = window.open("", "", "width=920,height=750,left=200,top=100,menubar=no,toolbar=no,location=no,status=no");
+            externalWindow.current = window.open("", "", "width=1000,height=800,left=200,top=100,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes");
         }
+
         const win = externalWindow.current;
-        if (!win) { alert("팝업 차단 해제 필요"); if (onClose) onClose(); return; }
 
-        win.document.title = title || "관리자 팝업";
-        win.document.body.style.margin = '0';
-        win.document.body.style.backgroundColor = '#ffffff';
+        if (!win) {
+            alert("⚠️ 팝업이 차단되었습니다! 브라우저 주소창 우측의 팝업 차단을 해제해주세요.");
+            if (onClose) onClose();
+            return;
+        }
 
-        document.querySelectorAll('style, link[rel="stylesheet"]').forEach(node => {
+        // 1. 기본 HTML 구조 작성
+        try {
+            win.document.open();
+            win.document.write(`
+                <!DOCTYPE html>
+                <html lang="ko">
+                <head>
+                    <meta charset="utf-8" />
+                    <title>${title || "관리자 팝업"}</title>
+                    <style>
+                        body { margin: 0; padding: 0; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+                        #popout-root { height: 100vh; overflow: auto; }
+                        /* 스크롤바 숨김 처리 */
+                        ::-webkit-scrollbar { display: none; }
+                        * { -ms-overflow-style: none; scrollbar-width: none; }
+                    </style>
+                </head>
+                <body>
+                    <div id="popout-root"></div>
+                </body>
+                </html>
+            `);
+            win.document.close();
+        } catch (e) {
+            console.error("Popup Write Error:", e);
+        }
+
+        // 2. 부모 창의 스타일(Tailwind 등) 복사
+        // 1) <link rel="stylesheet"> 복사
+        document.querySelectorAll('link[rel="stylesheet"]').forEach(node => {
             win.document.head.appendChild(node.cloneNode(true));
         });
+        // 2) <style> 태그 복사
+        document.querySelectorAll('style').forEach(node => {
+            win.document.head.appendChild(node.cloneNode(true));
+        });
+
+        // 3) Tailwind CDN 강제 주입 (안전장치)
         const script = win.document.createElement('script');
         script.src = "https://cdn.tailwindcss.com";
         win.document.head.appendChild(script);
 
-        let root = win.document.getElementById('popout-root');
-        if (!root) {
-            root = win.document.createElement('div');
-            root.id = 'popout-root';
-            win.document.body.appendChild(root);
-        }
-        setContainerEl(root);
-        win.onbeforeunload = () => { if (onClose) onClose(); };
-        return () => { if (win && !win.closed) win.close(); };
-    }, []);
+        // 컨테이너 설정 (React Portal 타겟)
+        // 약간의 지연을 주어 DOM이 확실히 생성된 후 타겟팅
+        setTimeout(() => {
+            const container = win.document.getElementById('popout-root');
+            if (container) {
+                setContainerEl(container);
+            } else {
+                console.error("Popup container not found");
+                if (onClose) onClose();
+            }
+        }, 100);
 
+        // 팝업이 사용자에 의해 닫혔는지 감시
+        const timer = setInterval(() => {
+            if (win.closed) {
+                clearInterval(timer);
+                if (onClose) onClose();
+            }
+        }, 500);
+
+        // 컴포넌트 언마운트 시 (즉, 부모에서 모달 닫기 버튼 눌렀을 때) 팝업 닫기
+        return () => {
+            clearInterval(timer);
+            if (win && !win.closed) {
+                win.close();
+            }
+        };
+    }, []); // 빈 의존성 배열: 컴포넌트 마운트 시 1회만 실행
+
+    // containerEl이 준비되면 그곳에 children을 렌더링 (React Portal)
     return containerEl ? ReactDOM.createPortal(children, containerEl) : null;
 };
 
@@ -227,6 +287,10 @@ function AdminDashboard({ user, onLogout }) {
     const chatScrollRef = useRef(null);
     const [isSending, setIsSending] = useState(false);
     const [chatInputNumber, setChatInputNumber] = useState('');
+
+    const [showFailModal, setShowFailModal] = useState(false);
+    const [failTarget, setFailTarget] = useState(null);
+    const [selectedFailReason, setSelectedFailReason] = useState('');
 
     const [statPeriodType, setStatPeriodType] = useState('month');
     const [statDate, setStatDate] = useState(() => new Date().toISOString().substring(0, 7));
@@ -338,7 +402,12 @@ function AdminDashboard({ user, onLogout }) {
         } else {
             fetchAllData();
             fetchAgents();
-            if (activeTab === 'issue_manage') fetch(`${API_BASE}/api/failure_reasons/`, { headers: getAuthHeaders() }).then(res => res.json()).then(setReasons);
+
+            // 🟢 [수정] 실패 사유를 모든 탭에서 불러오도록 변경 (조건문 밖으로 이동)
+            fetch(`${API_BASE}/api/failure_reasons/`, { headers: getAuthHeaders() })
+                .then(res => res.json())
+                .then(setReasons);
+
             if (activeTab === 'settlement') fetch(`${API_BASE}/api/settlement_statuses/`, { headers: getAuthHeaders() }).then(res => res.json()).then(setSettlementStatuses);
             if (activeTab === 'settings') fetchSettings();
             if (activeTab === 'policy') fetchNoticesAndPolicies();
@@ -389,51 +458,83 @@ function AdminDashboard({ user, onLogout }) {
     }, [notices]);
 
     // ⭐️ [테이블 표시 데이터 로직]
+    // displayedData useMemo 내부를 아래와 같이 수정/보완하세요.
     const displayedData = useMemo(() => {
         let data = [];
+
+        // 1. [관리자 전용] 전체 DB
         if (activeTab === 'total_manage') {
             data = allCustomers;
             if (totalDbAgentFilter) {
                 if (totalDbAgentFilter === 'unassigned') data = data.filter(c => c.owner === null);
                 else data = data.filter(c => String(c.owner) === String(totalDbAgentFilter));
             }
-        } else if (activeTab === 'shared') {
+        }
+        // 2. 공유 DB (미배정)
+        else if (activeTab === 'shared') {
             data = sharedCustomers;
             if (sharedSubTab !== 'ALL') {
                 if (sharedSubTab === '기타') { const known = ['당근', '토스', '실패DB']; data = data.filter(c => !known.includes(c.platform)); }
                 else { data = data.filter(c => c.platform === sharedSubTab); }
             }
             if (viewDuplicatesOnly) { data = data.filter(c => duplicateSet.has(c.phone)).sort((a, b) => a.phone.localeCompare(b.phone)); }
-        } else if (activeTab === 'consult') {
-            data = allCustomers.filter(c => String(c.owner) === String(currentUserId) && !['설치완료', '해지진행', '접수취소'].includes(c.status));
+        }
+        // 3. [추가] 내 상담관리 (관리자 본인의 상담건)
+        else if (activeTab === 'consult') {
+            // 관리자 본인이 담당자인 건만 필터링 (접수완료, 설치완료 등 제외)
+            data = allCustomers.filter(c => String(c.owner) === String(currentUserId) && !['설치완료', '해지진행', '접수취소', '장기가망', '접수완료', '실패'].includes(c.status));
             if (statusFilter !== 'ALL') data = data.filter(c => c.status === statusFilter);
-            data.sort((a, b) => { const dateA = a.callback_schedule ? new Date(a.callback_schedule).getTime() : Infinity; const dateB = b.callback_schedule ? new Date(b.callback_schedule).getTime() : Infinity; return dateA - dateB; });
-        } else if (activeTab === 'long_term') {
+            data.sort((a, b) => {
+                const dateA = a.callback_schedule ? new Date(a.callback_schedule).getTime() : Infinity;
+                const dateB = b.callback_schedule ? new Date(b.callback_schedule).getTime() : Infinity;
+                return dateA - dateB;
+            });
+        }
+        // 4. [추가] 내 가망관리
+        else if (activeTab === 'long_term') {
             data = allCustomers.filter(c => String(c.owner) === String(currentUserId) && c.status === '장기가망');
             data.sort((a, b) => new Date(a.callback_schedule || 0) - new Date(b.callback_schedule || 0));
-        } else if (activeTab === 'issue_manage') {
+        }
+        // 5. AS/실패 관리
+        else if (activeTab === 'issue_manage') {
             if (issueSubTab === 'fail') {
                 data = allCustomers.filter(c => c.status === '실패');
                 if (failReasonFilter) data = data.filter(c => c.detail_reason === failReasonFilter);
             } else {
                 data = allCustomers.filter(c => c.status === 'AS요청');
             }
-        } else if (activeTab === 'reception') {
+        }
+        // 6. [추가] 접수관리 (관리자 본인 접수건 + 전체 조회 가능)
+        else if (activeTab === 'reception') {
             data = allCustomers.filter(c => c.status === '접수완료');
-        } else if (activeTab === 'installation') {
+        }
+        // 7. [추가] 설치완료 (관리자 본인 건 + 전체 조회 가능)
+        else if (activeTab === 'installation') {
             data = allCustomers.filter(c => c.status === '설치완료');
-        } else if (activeTab === 'settlement') {
-            const targets = (config && config.settlement_target_statuses) ? config.settlement_target_statuses : ['설치완료', '접수완료', '해지진행', '접수취소'];
+        }
+
+        // 8. 정산관리
+        else if (activeTab === 'settlement') {
+            // ⭐️ [수정] 기본 타겟에서 '접수취소' 제거
+            const targets = (config && config.settlement_target_statuses)
+                ? config.settlement_target_statuses
+                : ['설치완료', '접수완료', '해지진행'];
+
             data = allCustomers.filter(c => targets.includes(c.status));
+
+            // 혹시 모를 '접수취소' 데이터 강제 제외
+            data = data.filter(c => c.status !== '접수취소');
+
             if (settlementStatusFilter !== 'ALL') data = data.filter(c => c.status === settlementStatusFilter);
         }
 
+        // 공통 필터: 담당자 필터 (접수, 설치, 정산 탭에서 동작)
         if (['reception', 'installation', 'settlement'].includes(activeTab) && salesAgentFilter) {
             data = data.filter(c => String(c.owner) === String(salesAgentFilter));
         }
+
         return data;
     }, [activeTab, allCustomers, sharedCustomers, duplicateSet, totalDbAgentFilter, issueSubTab, failReasonFilter, salesAgentFilter, settlementStatusFilter, statusFilter, sharedSubTab, config, currentUserId]);
-
 
     // ⭐️ [수정 1] 상단 실시간 지표: 최근 6개월 데이터 계산 (리스트 형태)
     // ⭐️ [수정됨] 상단 실시간 지표 계산 (최근 6개월, 전체 DB 기준)
@@ -662,7 +763,18 @@ function AdminDashboard({ user, onLogout }) {
     const sendRequest = () => { if (!requestTarget) return; setAllCustomers(prev => prev.map(c => c.id === requestTarget.id ? { ...c, request_status: 'REQUESTED', request_message: requestMessage } : c)); fetch(`${API_BASE}/api/customers/${requestTarget.id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify({ request_status: 'REQUESTED', request_message: requestMessage }) }).then(() => { alert("확인 요청이 전송되었습니다."); setShowRequestModal(false); setRequestMessage(''); setRequestTarget(null); }).catch(err => alert("요청 실패")); };
     const clearRequest = (id) => { if (!window.confirm("완료된 요청을 정리하시겠습니까?")) return; handleInlineUpdate(id, 'request_status', null); };
     const handleToggleAlarm = (e, customer) => { e.stopPropagation(); const currentList = parseChecklist(customer.checklist); const isAlarmOn = currentList.includes('알림ON'); const newList = isAlarmOn ? currentList.filter(item => item !== '알림ON') : [...currentList, '알림ON']; handleInlineUpdate(customer.id, 'checklist', newList.join(',')); };
-    const handleCallbackChange = (customer, type, val) => { let current = customer.callback_schedule ? new Date(customer.callback_schedule) : new Date(); if (isNaN(current.getTime())) { current = new Date(); current.setHours(9, 0, 0, 0); } let y = current.getFullYear(); let m = current.getMonth() + 1; let d = current.getDate(); let h = current.getHours(); if (type === 'year') y = parseInt(val) || y; if (type === 'month') m = parseInt(val) || m; if (type === 'day') d = parseInt(val) || d; if (type === 'hour') h = parseInt(val) || h; const newDate = new Date(y, m - 1, d, h); const yy = newDate.getFullYear(); const mm = String(newDate.getMonth() + 1).padStart(2, '0'); const dd = String(newDate.getDate()).padStart(2, '0'); const hh = String(newDate.getHours()).padStart(2, '0'); handleInlineUpdate(customer.id, 'callback_schedule', `${yy}-${mm}-${dd}T${hh}:00:00`); };
+    const handleCallbackChange = (customer, type, val) => {
+        let current = customer.callback_schedule ? new Date(customer.callback_schedule) : new Date();
+        if (isNaN(current.getTime())) { current = new Date(); current.setHours(9, 0, 0, 0); }
+        let y = current.getFullYear(); let m = current.getMonth() + 1; let d = current.getDate(); let h = current.getHours();
+        if (type === 'year') y = parseInt(val) || y;
+        if (type === 'month') m = parseInt(val) || m;
+        if (type === 'day') d = parseInt(val) || d;
+        if (type === 'hour') h = parseInt(val) || h;
+        const newDate = new Date(y, m - 1, d, h);
+        const yy = newDate.getFullYear(); const mm = String(newDate.getMonth() + 1).padStart(2, '0'); const dd = String(newDate.getDate()).padStart(2, '0'); const hh = String(newDate.getHours()).padStart(2, '0');
+        handleInlineUpdate(customer.id, 'callback_schedule', `${yy}-${mm}-${dd}T${hh}:00:00`);
+    };
     const openHistoryModal = (c) => { alert(`${c.name}님의 상세 정보로 이동합니다.`); };
     const handleAdSpendChange = (value) => { const cleanValue = value.replace(/[^0-9]/g, ''); const currentMonthKey = statDate.substring(0, 7); setMonthlyAdSpends(prev => ({ ...prev, [currentMonthKey]: cleanValue })); setAdSpend(cleanValue); };
     const handleColumnToggle = (col) => setVisibleColumns(prev => ({ ...prev, [col]: !prev[col] }));
@@ -671,16 +783,35 @@ function AdminDashboard({ user, onLogout }) {
 
     // 상태 변경 핸들러
     const handleStatusChangeRequest = async (id, newStatus) => {
+        // 1. 접수완료 처리
         if (newStatus === '접수완료') {
-            const target = allCustomers.find(c => c.id === id);
+            const target = allCustomers.find(c => String(c.id) === String(id)); // ID 문자열 비교로 안전성 확보
+            if (!target) return; // 대상 없으면 중단
+
             setCompletionTarget(target);
-            // ⭐️ KT 기본값 설정
-            setSelectedPlatform(target.platform || 'KT');
+
+            // ⭐️ [핵심 수정] 고객의 플랫폼이 정책 데이터에 없으면 'KT'를 기본값으로 사용 (오류 방지)
+            const platformKey = target.platform && policyData[target.platform] ? target.platform : 'KT';
+            setSelectedPlatform(platformKey);
+
             setDynamicFormData({});
             setCalculatedPolicy(0);
             setShowCompletionModal(true);
             return;
-        } else if (newStatus === '실패이관') {
+        }
+
+        // 🟢 2. [추가됨] 실패 처리 (모달 열기)
+        else if (newStatus === '실패') {
+            const target = allCustomers.find(c => c.id === id);
+            setFailTarget(target);
+            setSelectedFailReason('');
+            setShowFailModal(true);
+            return;
+        }
+
+        // 3. 실패이관 처리
+        else if (newStatus === '실패이관') {
+            // ... (기존 실패이관 코드 유지) ...
             try {
                 await fetch(`${API_BASE}/api/customers/${id}/add_log/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ user_id: user.user_id, content: `[시스템] 빠른 실패이관 처리` }) });
                 await fetch(`${API_BASE}/api/customers/${id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify({ status: '실패이관', owner: null }) });
@@ -688,7 +819,36 @@ function AdminDashboard({ user, onLogout }) {
             } catch (err) { console.error(err); }
             return;
         }
+
+        // 4. 그 외 상태 변경
         handleInlineUpdate(id, 'status', newStatus);
+    };
+
+    // 🟢 [추가] 실패 확정 핸들러
+    const handleConfirmFail = () => {
+        if (!failTarget) return;
+        if (!selectedFailReason) return alert("❌ 실패 사유를 선택해주세요.");
+
+        fetch(`${API_BASE}/api/customers/${failTarget.id}/`, {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify({
+                status: '실패',
+                detail_reason: selectedFailReason
+            })
+        })
+            .then(() => {
+                alert("처리되었습니다.");
+                // 로컬 데이터 즉시 업데이트
+                setAllCustomers(prev => prev.map(c =>
+                    c.id === failTarget.id
+                        ? { ...c, status: '실패', detail_reason: selectedFailReason }
+                        : c
+                ));
+                setShowFailModal(false);
+                setFailTarget(null);
+            })
+            .catch(err => alert("오류 발생: " + err));
     };
 
     // 정책 계산 핸들러
@@ -719,7 +879,13 @@ function AdminDashboard({ user, onLogout }) {
     const handleSendManualChat = async (textToSend = null) => { const msg = textToSend || chatInput; if (!msg?.trim() || !chatTarget) return; setIsSending(true); try { const res = await fetch(`${API_BASE}/api/sales/manual-sms/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ customer_id: chatTarget.id, message: msg }) }); if (res.ok) { if (!textToSend) setChatInput(''); setChatMessages(prev => [...prev, { id: Date.now(), sender: 'me', text: msg, created_at: '방금 전' }]); } else alert("전송 실패"); } catch { alert("오류"); } finally { setIsSending(false); } };
     const handleCreateAgent = () => { fetch(`${API_BASE}/api/agents/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(newAgent) }).then(res => { if (res.ok) { alert("완료"); setNewAgent({ username: '', password: '' }); fetchAgents(); } else res.json().then(d => alert(d.message)); }); };
     const handleDeleteAgent = (id, name) => { if (window.confirm(`'${name}' 삭제?`)) fetch(`${API_BASE}/api/agents/${id}/`, { method: 'DELETE', headers: getAuthHeaders() }).then(() => { alert("삭제 완료"); fetchAgents(); }); };
-    const renderInteractiveStars = (id, currentRank) => (<div className="flex cursor-pointer" onClick={(e) => e.stopPropagation()}>{[1, 2, 3, 4, 5].map(star => (<span key={star} className={`text-lg ${star <= currentRank ? 'text-yellow-400' : 'text-gray-300'} hover:scale-125 transition`} onClick={() => handleInlineUpdate(id, 'rank', star)}>★</span>))}</div>);
+    const renderInteractiveStars = (id, currentRank) => (
+        <div className="flex cursor-pointer" onClick={(e) => e.stopPropagation()}>
+            {[1, 2, 3, 4, 5].map(star => (
+                <span key={star} className={`text-lg ${star <= currentRank ? 'text-yellow-400' : 'text-gray-300'} hover:scale-125 transition`} onClick={() => handleInlineUpdate(id, 'rank', star)}>★</span>
+            ))}
+        </div>
+    );
 
     // ⭐️ [대기 화면] 설정 로딩 중
     if (!config) {
@@ -815,35 +981,29 @@ function AdminDashboard({ user, onLogout }) {
             )}
 
             {/* 탭 메뉴 영역 */}
-            <div className="flex gap-1 mb-4 border-b border-gray-200 pb-1 overflow-x-auto sticky top-[80px] z-30 bg-slate-50 hide-scrollbar">
+            <div className="flex gap-1 overflow-x-auto hide-scrollbar flex-wrap">
                 {[
-                    { id: 'total_manage', label: '🗂️ 전체 DB' },
+                    { id: 'total_manage', label: '🗂️ 전체 DB' }, // 관리자 전용
                     { id: 'shared', label: '🛒 미배정(공유)' },
-                    { id: 'consult', label: '📞 내 상담관리', special: true },
-                    { id: 'long_term', label: '📅 내 가망관리', special: true },
+                    { id: 'consult', label: '📞 내 상담관리' },
+                    { id: 'long_term', label: '📅 내 가망관리' },
                     { id: 'reception', label: '📝 접수관리' },
                     { id: 'installation', label: '✅ 설치완료' },
-                    { id: 'settlement', label: '💰 정산관리' },
+                    { id: 'settlement', label: '💰 정산관리' }, // 관리자 전용 (기존 유지)
                     { id: 'issue_manage', label: '🛠 AS/실패' },
                     { id: 'stats', label: '📊 통계' },
-                    { id: 'users', label: '👥 상담사' },
+                    { id: 'users', label: '👥 상담사' }, // 관리자 전용
                     { id: 'policy', label: '📢 정책/공지' },
-                    { id: 'settings', label: '⚙️ 설정' },
-                    { id: 'notepad', label: '📝 메모장', special: true }
+                    { id: 'settings', label: '⚙️ 설정' }, // 관리자 전용
+                    { id: 'notepad', label: '📝 메모장' }
                 ].map(tab => (
                     <button
                         key={tab.id}
-                        onClick={() => { setActiveTab(tab.id); setSalesAgentFilter(''); }}
-                        className={`
-                px-4 py-2 rounded-t-lg text-[13px] font-bold transition whitespace-nowrap border-t border-l border-r
-                ${activeTab === tab.id
-                                // 활성화된 탭 스타일 (흰색 배경 + 하단 테두리 제거로 콘텐츠와 연결된 느낌)
-                                ? (tab.special
-                                    ? 'bg-indigo-50 text-indigo-700 border-indigo-200 border-b-white translate-y-[1px]'
-                                    : 'bg-white text-indigo-600 border-gray-200 border-b-white translate-y-[1px]')
-                                // 비활성화된 탭 스타일 (회색 배경)
-                                : 'bg-gray-100 text-gray-400 border-transparent hover:bg-gray-200'}
-            `}
+                        onClick={() => { setActiveTab(tab.id); setStatusFilter('ALL'); }}
+                        className={`px-4 py-2 rounded-t-lg text-[13px] font-bold transition whitespace-nowrap border-t border-l border-r 
+                            ${activeTab === tab.id
+                                ? 'bg-white text-indigo-600 border-gray-200 border-b-white translate-y-[1px]'
+                                : 'bg-gray-100 text-gray-400 border-transparent hover:bg-gray-200'}`}
                     >
                         {tab.label}
                     </button>
@@ -969,6 +1129,256 @@ function AdminDashboard({ user, onLogout }) {
                     </div>
                 )}
 
+                {/* 5. 통계 탭 (관리자용) */}
+                {activeTab === 'stats' && dashboardStats && (
+                    <div className="space-y-6 animate-fade-in">
+
+                        {/* (1) 상단 컨트롤 바 */}
+                        <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-gray-50 rounded-xl border border-gray-200 shadow-sm">
+                            <div className="flex items-center gap-2">
+                                <div className="flex bg-white rounded-lg border border-gray-300 overflow-hidden p-1">
+                                    <button onClick={() => setStatPeriodType('month')} className={`px-3 py-1.5 text-xs font-bold rounded transition ${statPeriodType === 'month' ? 'bg-indigo-600 text-white' : 'hover:bg-gray-100'}`}>월별</button>
+                                    <button onClick={() => { setStatPeriodType('day'); setStatDate(new Date().toISOString().split('T')[0]); }} className={`px-3 py-1.5 text-xs font-bold rounded transition ${statPeriodType === 'day' ? 'bg-indigo-600 text-white' : 'hover:bg-gray-100'}`}>일별</button>
+                                </div>
+
+                                <input
+                                    type={statPeriodType === 'month' ? 'month' : 'date'}
+                                    className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-bold text-gray-700 outline-none focus:border-indigo-500"
+                                    value={statPeriodType === 'month' ? (statDate.length > 7 ? statDate.substring(0, 7) : statDate) : (statDate.length === 7 ? `${statDate}-01` : statDate)}
+                                    onChange={(e) => setStatDate(e.target.value)}
+                                />
+
+                                <select className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-bold text-gray-700 outline-none focus:border-indigo-500" value={statPlatform} onChange={(e) => setStatPlatform(e.target.value)}>
+                                    <option value="ALL">전체 플랫폼</option>
+                                    {config?.report_platform_filters?.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+                                </select>
+                            </div>
+
+                            <div className="flex items-center gap-2">
+                                {/* 상담사 선택 (미배정 제외) */}
+                                <select
+                                    className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-sm font-bold text-indigo-700 outline-none focus:border-indigo-500 shadow-sm cursor-pointer"
+                                    value={selectedStatAgent}
+                                    onChange={(e) => setSelectedStatAgent(e.target.value)}
+                                >
+                                    <option value="ALL">👥 전체 상담사 합계</option>
+                                    {serverStats && serverStats.filter(s => s.id !== 'unknown').map(agent => (
+                                        <option key={agent.id} value={agent.id}>
+                                            {String(agent.id) === String(currentUserId) ? `👤 ${agent.name} (나)` : `👤 ${agent.name}`}
+                                        </option>
+                                    ))}
+                                </select>
+
+                                <button
+                                    onClick={() => setShowCustomModal(true)}
+                                    className="bg-white border border-gray-300 text-gray-500 p-1.5 rounded-lg hover:bg-gray-100 hover:text-indigo-600 transition shadow-sm"
+                                    title="통계 화면 설정"
+                                >
+                                    ⚙️
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* (2) 핵심 지표 카드 */}
+                        <div className="grid grid-cols-4 gap-4">
+                            {visibleCards.totalDB && (
+                                <div className="bg-white p-5 border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-gray-500 mb-1">총 유입 DB</div>
+                                    <div className="text-3xl font-extrabold text-gray-800">
+                                        {dashboardStats.totalDB.toLocaleString()} <span className="text-sm font-normal text-gray-400">건</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.acceptedCount && (
+                                <div className="bg-white p-5 border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-indigo-500 mb-1">총 접수 건수</div>
+                                    <div className="text-3xl font-extrabold text-indigo-600">
+                                        {dashboardStats.acceptedCount.toLocaleString()} <span className="text-sm font-normal text-gray-400">건</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.installCount && (
+                                <div className="bg-white p-5 border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-green-500 mb-1">설치 완료</div>
+                                    <div className="text-3xl font-extrabold text-green-600">
+                                        {dashboardStats.installCount.toLocaleString()} <span className="text-sm font-normal text-gray-400">건</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.adSpend && (
+                                <div className="bg-white p-5 border border-red-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-red-500 mb-1">광고비 (자동계산)</div>
+                                    <div className="text-3xl font-extrabold text-red-600">
+                                        {formatCurrency(dashboardStats.adSpend)} <span className="text-sm font-normal text-gray-400">원</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.acceptedRevenue && (
+                                <div className="bg-white p-5 border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-blue-500 mb-1">접수 매출 (예상)</div>
+                                    <div className="text-2xl font-extrabold text-blue-600">
+                                        {formatCurrency(dashboardStats.acceptedRevenue)} <span className="text-sm font-normal text-gray-400">원</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.installedRevenue && (
+                                <div className="bg-white p-5 border border-gray-100 rounded-2xl shadow-sm flex flex-col justify-between">
+                                    <div className="text-xs font-bold text-emerald-500 mb-1">설치 매출 (확정)</div>
+                                    <div className="text-2xl font-extrabold text-emerald-600">
+                                        {formatCurrency(dashboardStats.installedRevenue)} <span className="text-sm font-normal text-gray-400">원</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {visibleCards.netProfit && (
+                                <div className="bg-gradient-to-br from-indigo-500 to-purple-600 p-5 rounded-2xl shadow-lg flex flex-col justify-between text-white">
+                                    <div className="text-xs font-bold text-indigo-100 mb-1">최종 순수익 (매출-광고비)</div>
+                                    <div className="text-3xl font-extrabold">
+                                        {formatCurrency(dashboardStats.netProfit)} <span className="text-sm font-medium opacity-70">원</span>
+                                    </div>
+                                </div>
+                            )}
+
+                            {(visibleCards.cancelRate || visibleCards.netInstallRate) && (
+                                <div className="bg-gray-50 p-5 rounded-2xl border border-gray-200 flex flex-col justify-around gap-2">
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs font-bold text-gray-500">접수율</span>
+                                        <span className="text-sm font-extrabold text-gray-800">{dashboardStats.acceptRate}%</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                                        <div className="bg-blue-500 h-1.5 rounded-full" style={{ width: `${Math.min(dashboardStats.acceptRate, 100)}%` }}></div>
+                                    </div>
+                                    <div className="flex justify-between items-center">
+                                        <span className="text-xs font-bold text-gray-500">취소율</span>
+                                        <span className="text-sm font-extrabold text-red-500">{dashboardStats.cancelRate}%</span>
+                                    </div>
+                                    <div className="w-full bg-gray-200 rounded-full h-1.5">
+                                        <div className="bg-red-500 h-1.5 rounded-full" style={{ width: `${Math.min(dashboardStats.cancelRate, 100)}%` }}></div>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* (3) 상세 테이블 섹션 (전체 상담사 표시) */}
+                        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs tracking-wider border-b border-slate-200 sticky top-0 z-10">
+                                    <tr>
+                                        {visibleColumns.owner_name && <th className="px-4 py-3">담당자</th>}
+                                        {visibleColumns.db && <th className="px-4 py-3 text-right">디비</th>}
+                                        {visibleColumns.accepted && <th className="px-4 py-3 text-right text-blue-600">접수</th>}
+                                        {visibleColumns.installed && <th className="px-4 py-3 text-right text-green-600">설치</th>}
+                                        {visibleColumns.canceled && <th className="px-4 py-3 text-right text-red-500">취소</th>}
+                                        {visibleColumns.adSpend && <th className="px-4 py-3 text-right text-gray-500">광고비</th>}
+                                        {visibleColumns.acceptedRevenue && <th className="px-4 py-3 text-right">접수매출</th>}
+                                        {visibleColumns.installedRevenue && <th className="px-4 py-3 text-right">설치매출</th>}
+                                        {visibleColumns.netProfit && <th className="px-4 py-3 text-right text-indigo-700 bg-indigo-50">순이익</th>}
+                                        {visibleColumns.acceptRate && <th className="px-4 py-3 text-right">접수율</th>}
+                                        {visibleColumns.cancelRate && <th className="px-4 py-3 text-right">취소율</th>}
+                                        {visibleColumns.netInstallRate && <th className="px-4 py-3 text-right">순청약율</th>}
+                                        {visibleColumns.avgMargin && <th className="px-4 py-3 text-right">평균마진</th>}
+                                        <th className="px-4 py-3 text-right text-purple-600">순이익율</th>
+                                        <th className="px-4 py-3 text-center">상세</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-gray-100">
+                                    {agentStats.map(agent => (
+                                        <React.Fragment key={agent.id}>
+                                            <tr className="border-b border-slate-100 hover:bg-slate-50 transition duration-150 font-bold text-gray-800">
+                                                {visibleColumns.owner_name && <td className="px-4 py-3">{String(agent.id) === String(currentUserId) ? `${agent.name} (나)` : agent.name}</td>}
+                                                {visibleColumns.db && <td className="px-4 py-3 text-right">{agent.db}</td>}
+                                                {visibleColumns.accepted && <td className="px-4 py-3 text-right text-blue-600">{agent.accepted}</td>}
+                                                {visibleColumns.installed && <td className="px-4 py-3 text-right text-green-600">{agent.installed}</td>}
+                                                {visibleColumns.canceled && <td className="px-4 py-3 text-right text-red-500">{agent.canceled}</td>}
+                                                {visibleColumns.adSpend && <td className="px-4 py-3 text-right text-red-400">{formatCurrency(agent.adSpend)}</td>}
+                                                {visibleColumns.acceptedRevenue && <td className="px-4 py-3 text-right text-blue-500">{formatCurrency(agent.acceptedRevenue)}</td>}
+                                                {visibleColumns.installedRevenue && <td className="px-4 py-3 text-right text-green-600">{formatCurrency(agent.installedRevenue)}</td>}
+                                                {visibleColumns.netProfit && <td className="px-4 py-3 text-right text-indigo-700 bg-indigo-50">{formatCurrency(agent.netProfit)}</td>}
+                                                {visibleColumns.acceptRate && <td className="px-4 py-3 text-right">{agent.acceptRate}%</td>}
+                                                {visibleColumns.cancelRate && <td className="px-4 py-3 text-right">{agent.cancelRate}%</td>}
+                                                {visibleColumns.netInstallRate && <td className="px-4 py-3 text-right">{agent.netInstallRate}%</td>}
+                                                {visibleColumns.avgMargin && <td className="px-4 py-3 text-right">{formatCurrency(agent.avgMargin)}</td>}
+                                                <td className="px-4 py-3 text-right text-purple-600">{agent.netProfitMargin}%</td>
+
+                                                <td className="px-4 py-3 text-center">
+                                                    <button
+                                                        onClick={() => toggleRow(agent.id)}
+                                                        className="text-xs bg-indigo-100 text-indigo-600 px-2 py-1 rounded hover:bg-indigo-200 transition"
+                                                    >
+                                                        {expandedRows.has(agent.id) ? '접기 ▲' : '플랫폼 ▼'}
+                                                    </button>
+                                                </td>
+                                            </tr>
+
+                                            {/* 확장된 상세 행 (플랫폼별 데이터) */}
+                                            {expandedRows.has(agent.id) && (
+                                                <tr className="bg-gray-50">
+                                                    <td colSpan="15" className="p-4">
+                                                        <div className="bg-white rounded-lg border border-gray-200 p-4 shadow-inner">
+                                                            <h4 className="text-xs font-bold text-gray-500 mb-2">📊 {agent.name}님 - 플랫폼별 상세</h4>
+                                                            <table className="w-full text-xs text-gray-600">
+                                                                <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs tracking-wider border-b border-slate-200">
+                                                                    <tr>
+                                                                        <th className="px-4 py-3">플랫폼</th>
+                                                                        <th className="px-4 py-3 text-right">디비</th>
+                                                                        <th className="px-4 py-3 text-right">접수</th>
+                                                                        <th className="px-4 py-3 text-right">설치</th>
+                                                                        <th className="px-4 py-3 text-right">취소</th>
+                                                                        <th className="px-4 py-3 text-right">광고비</th>
+                                                                        <th className="px-4 py-3 text-right">접수매출</th>
+                                                                        <th className="px-4 py-3 text-right">설치매출</th>
+                                                                        <th className="px-4 py-3 text-right bg-indigo-50 text-indigo-700 font-bold">순이익</th>
+                                                                        <th className="px-4 py-3 text-right">접수율</th>
+                                                                        <th className="px-4 py-3 text-right">취소율</th>
+                                                                        <th className="px-4 py-3 text-right">순청약율</th>
+                                                                        <th className="px-4 py-3 text-right">평균마진</th>
+                                                                        <th className="px-4 py-3 text-right text-purple-600">순이익율</th>
+                                                                    </tr>
+                                                                </thead>
+                                                                <tbody className="divide-y divide-gray-100">
+                                                                    {agent.platformDetails.map((pf, idx) => (
+                                                                        <tr key={`${agent.id}-${idx}`} className="border-b border-slate-100 hover:bg-slate-50 transition duration-150">
+                                                                            <td className="px-4 py-3 font-bold text-gray-700">{pf.name}</td>
+                                                                            <td className="px-4 py-3 text-right">{pf.db}</td>
+                                                                            <td className="px-4 py-3 text-right text-blue-600">{pf.accepted}</td>
+                                                                            <td className="px-4 py-3 text-right text-green-600">{pf.installed}</td>
+                                                                            <td className="px-4 py-3 text-right text-red-500">{pf.canceled}</td>
+                                                                            <td className="px-4 py-3 text-right text-gray-400">{formatCurrency(pf.adSpend)}</td>
+                                                                            <td className="px-4 py-3 text-right text-blue-500">{formatCurrency(pf.acceptedRevenue)}</td>
+                                                                            <td className="px-4 py-3 text-right text-green-600">{formatCurrency(pf.installedRevenue)}</td>
+                                                                            <td className="px-4 py-3 text-right text-indigo-700 font-bold bg-indigo-50">{formatCurrency(pf.netProfit)}</td>
+                                                                            <td className="px-4 py-3 text-right">{pf.acceptRate}%</td>
+                                                                            <td className="px-4 py-3 text-right">{pf.cancelRate}%</td>
+                                                                            <td className="px-4 py-3 text-right">{pf.netInstallRate}%</td>
+                                                                            <td className="px-4 py-3 text-right">{formatCurrency(pf.avgMargin)}</td>
+                                                                            <td className="px-4 py-3 text-right text-purple-600">{pf.netProfitMargin}%</td>
+                                                                        </tr>
+                                                                    ))}
+                                                                    {agent.platformDetails.length === 0 && (
+                                                                        <tr><td colSpan="14" className="text-center py-4">데이터가 없습니다.</td></tr>
+                                                                    )}
+                                                                </tbody>
+                                                            </table>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            )}
+                                        </React.Fragment>
+                                    ))}
+                                    {agentStats.length === 0 && (
+                                        <tr><td colSpan="15" className="p-10 text-center text-gray-400">데이터가 없습니다.</td></tr>
+                                    )}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                )}
+
                 {/* 1. [전체 DB 관리] */}
                 {activeTab === 'total_manage' && (
                     <div className="animate-fade-in">
@@ -1031,28 +1441,40 @@ function AdminDashboard({ user, onLogout }) {
                     </div>
                 )}
 
-                {/* 3. [내 상담관리] */}
+                {/* [추가] 3. 내 상담관리 / 가망관리 */}
                 {(activeTab === 'consult' || activeTab === 'long_term') && (
                     <div className="animate-fade-in">
                         <div className="flex justify-between items-center mb-4">
                             <h2 className="text-xl font-bold flex items-center gap-2 text-indigo-800">
-                                {activeTab === 'consult' ? '📞 내 상담 리스트' : '📅 내 장기 가망 리스트'}
+                                {activeTab === 'consult' ? '📞 내 상담 리스트 (관리자용)' : '📅 내 장기 가망 리스트'}
                             </h2>
                             {activeTab === 'consult' && (
                                 <div className="flex gap-2">
-                                    {QUICK_FILTERS.map(filter => (<button key={filter} onClick={() => setStatusFilter(filter)} className={`px-3 py-1 rounded-full text-xs font-bold transition border ${statusFilter === filter ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500'}`}>{filter}</button>))}
+                                    {QUICK_FILTERS.map(filter => (
+                                        <button key={filter} onClick={() => setStatusFilter(filter)} className={`px-3 py-1 rounded-full text-xs font-bold transition border ${statusFilter === filter ? 'bg-indigo-600 text-white' : 'bg-white text-gray-500'}`}>{filter}</button>
+                                    ))}
                                 </div>
                             )}
                         </div>
-                        <div className="overflow-x-auto border border-gray-200 rounded-lg">
+                        <div className="overflow-hidden border border-gray-200 rounded-lg">
+                            {/* 상담사 페이지와 동일한 테이블 구조 사용 */}
                             <table className="w-full text-left border-collapse table-fixed">
-                                <thead className="bg-gray-100 text-gray-700 text-sm font-bold">
+                                <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs tracking-wider border-b border-slate-200 sticky top-0 z-10">
                                     <tr>
-                                        <th className="p-3 w-16 text-center">번호</th><th className="p-3 w-24">플랫폼</th><th className="p-3 w-28">등록일</th><th className="p-3 w-28">이름</th><th className="p-3 w-40">연락처</th><th className="p-3 w-56 text-indigo-700">재통화(년/월/일/시)</th><th className="p-3 w-28">상태</th><th className="p-3">상담 메모</th>
+                                        <th className="px-4 py-3 w-16 text-center">번호</th>
+                                        <th className="px-4 py-3 w-24">플랫폼</th>
+                                        <th className="px-4 py-3 w-28">등록일</th>
+                                        <th className="px-4 py-3 w-28">이름</th>
+                                        <th className="px-4 py-3 w-40">연락처</th>
+                                        <th className="px-4 py-3 w-56 text-indigo-700">재통화(년/월/일/시)</th>
+                                        <th className="px-4 py-3 w-28">상태</th>
+                                        <th className="px-4 py-3">상담 메모</th>
+                                        <th className="px-4 py-3 w-12 text-center">채팅</th>
                                     </tr>
                                 </thead>
                                 <tbody className="text-sm text-gray-700">
                                     {displayedData.map(c => {
+                                        // 날짜 파싱 로직 (상담사 페이지와 동일)
                                         const scheduleDate = c.callback_schedule ? new Date(c.callback_schedule) : new Date();
                                         const currentY = isNaN(scheduleDate.getTime()) ? '' : scheduleDate.getFullYear();
                                         const currentM = isNaN(scheduleDate.getTime()) ? '' : scheduleDate.getMonth() + 1;
@@ -1062,38 +1484,47 @@ function AdminDashboard({ user, onLogout }) {
                                         const isAlarmOn = checklistItems.includes('알림ON');
 
                                         return (
-                                            <tr key={c.id} className="border-b border-gray-100 hover:bg-yellow-50 transition">
-                                                <td className="p-3 text-center text-gray-400">{c.id}</td>
-                                                <td className="p-3"><span className="bg-gray-100 px-2 py-1 rounded text-xs border">{c.platform}</span></td>
-                                                <td className="p-3 text-gray-500">{c.upload_date}</td>
-                                                <td className="p-3 font-bold">
-                                                    <div className="flex items-center gap-2">{c.name}<button onClick={(e) => handleToggleAlarm(e, c)} className={`text-sm transition-transform active:scale-95 ${isAlarmOn ? 'opacity-100' : 'opacity-30 hover:opacity-70'}`} title={isAlarmOn ? "알림 켜짐" : "알림 꺼짐"}>{isAlarmOn ? '🔔' : '🔕'}</button></div>
+                                            <tr key={c.id} className="border-b border-slate-100 hover:bg-yellow-50 transition duration-150">
+                                                <td className="px-4 py-3 text-center text-gray-400">{c.id}</td>
+                                                <td className="px-4 py-3"><span className="bg-gray-100 px-2 py-1 rounded text-xs border">{c.platform}</span></td>
+                                                <td className="px-4 py-3 text-gray-500">{c.upload_date}</td>
+                                                <td className="px-4 py-3 font-bold">
+                                                    <div className="flex items-center gap-2">{c.name}<button onClick={(e) => handleToggleAlarm(e, c)} className={`text-sm ${isAlarmOn ? 'opacity-100' : 'opacity-30'}`}>{isAlarmOn ? '🔔' : '🔕'}</button></div>
                                                     <div className="mt-1">{renderInteractiveStars(c.id, c.rank)}</div>
                                                 </td>
-                                                <td className="p-3">{c.phone}</td>
-                                                <td className="p-3">
+                                                <td className="px-4 py-3">
+                                                    <div>{c.phone}</div>
+                                                    <div className="mt-1">
+                                                        <button onClick={(e) => handleOpenChat(e, c)} className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded border border-indigo-100">💬 SMS전송</button>
+                                                    </div>
+                                                </td>
+                                                <td className="px-4 py-3">
                                                     <div className="flex flex-col gap-1">
                                                         <div className="flex items-center gap-1">
-                                                            <input type="text" className="w-9 text-center bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-xs font-mono" placeholder="YYYY" defaultValue={currentY} onBlur={(e) => handleCallbackChange(c, 'year', e.target.value)} /><span className="text-gray-300 text-[10px]">-</span><input type="text" className="w-5 text-center bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-xs font-mono" placeholder="MM" defaultValue={currentM} onBlur={(e) => handleCallbackChange(c, 'month', e.target.value)} /><span className="text-gray-300 text-[10px]">-</span><input type="text" className="w-5 text-center bg-transparent border-b border-gray-300 focus:border-indigo-500 outline-none text-xs font-mono" placeholder="DD" defaultValue={currentD} onBlur={(e) => handleCallbackChange(c, 'day', e.target.value)} />
+                                                            <input type="text" className="w-9 text-center border-b" placeholder="YYYY" defaultValue={currentY} onBlur={(e) => handleCallbackChange(c, 'year', e.target.value)} />-
+                                                            <input type="text" className="w-5 text-center border-b" placeholder="MM" defaultValue={currentM} onBlur={(e) => handleCallbackChange(c, 'month', e.target.value)} />-
+                                                            <input type="text" className="w-5 text-center border-b" placeholder="DD" defaultValue={currentD} onBlur={(e) => handleCallbackChange(c, 'day', e.target.value)} />
                                                         </div>
-                                                        <select className="w-full bg-white border border-gray-200 rounded p-1 text-xs outline-none focus:border-indigo-500" value={currentH || ""} onChange={(e) => handleCallbackChange(c, 'hour', e.target.value)}>
+                                                        <select className="w-full border rounded text-xs" value={currentH || ""} onChange={(e) => handleCallbackChange(c, 'hour', e.target.value)}>
                                                             <option value="" disabled>시간</option>
                                                             {TIME_OPTIONS.map(h => <option key={h} value={h}>{h}시</option>)}
                                                         </select>
                                                     </div>
                                                 </td>
-                                                <td className="p-3">
-                                                    <select className={`w-full p-2 rounded text-xs font-bold outline-none ${getBadgeStyle(c.status)}`} value={c.status} onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}>
+                                                <td className="px-4 py-3">
+                                                    <select className={`w-full p-2 rounded text-xs font-bold ${getBadgeStyle(c.status)}`} value={c.status} onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}>
                                                         {STATUS_OPTIONS.map(opt => <option key={opt} value={opt}>{opt}</option>)}
                                                     </select>
                                                 </td>
-                                                <td className="p-3">
-                                                    <textarea className="w-full bg-transparent border border-transparent hover:border-gray-300 focus:border-indigo-500 rounded p-1 outline-none text-sm transition resize-none leading-relaxed" rows={1} style={{ minHeight: '1.5rem', height: 'auto' }} defaultValue={c.last_memo} onInput={autoResizeTextarea} onBlur={(e) => handleInlineUpdate(c.id, 'last_memo', e.target.value)} placeholder="내용 입력..." />
+                                                <td className="px-4 py-3">
+                                                    <textarea className="w-full bg-transparent border-b border-gray-200 text-sm resize-none" rows={1} defaultValue={c.last_memo} onBlur={(e) => handleInlineUpdate(c.id, 'last_memo', e.target.value)} placeholder="메모..." />
+                                                </td>
+                                                <td className="px-4 py-3 w-12 text-center">
+                                                    <button onClick={(e) => handleOpenChat(e, c)} className="text-xl">💬</button>
                                                 </td>
                                             </tr>
                                         );
                                     })}
-                                    {displayedData.length === 0 && <tr><td colSpan="8" className="p-10 text-center text-gray-400">데이터가 없습니다.</td></tr>}
                                 </tbody>
                             </table>
                         </div>
@@ -1111,34 +1542,122 @@ function AdminDashboard({ user, onLogout }) {
                 )}
 
                 {/* [접수 관리] */}
+                {/* [접수 관리] - 상담사 페이지 UI 적용 (정책/지원금/메모 추가) */}
                 {activeTab === 'reception' && (
                     <div className="animate-fade-in">
                         <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-bold flex items-center gap-2 text-gray-800">📝 접수 관리 <span className="text-sm font-normal text-gray-400">(상태: 접수완료)</span></h2>
-                            <select className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-gray-700 text-sm outline-none focus:border-indigo-500" value={salesAgentFilter} onChange={e => setSalesAgentFilter(e.target.value)}><option value="">👤 전체 상담사 보기</option>{agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}</select>
+                            <h2 className="text-xl font-bold flex items-center gap-2 text-gray-800">📝 접수 현황 관리 <span className="text-sm font-normal text-gray-400">(상태: 접수완료)</span></h2>
+                            <select className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-gray-700 text-sm outline-none focus:border-indigo-500" value={salesAgentFilter} onChange={e => setSalesAgentFilter(e.target.value)}>
+                                <option value="">👤 전체 상담사 보기</option>
+                                {agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}
+                            </select>
                         </div>
                         <div className="max-h-[600px] overflow-y-auto border border-gray-200 rounded-lg">
                             <table className="w-full text-left text-sm text-gray-700">
-                                <thead className="bg-gray-100 sticky top-0 z-10 shadow-sm text-gray-500 font-bold uppercase text-xs"><tr><th className="p-3">접수일</th><th className="p-3 text-indigo-600">담당자</th><th className="p-3">고객명</th><th className="p-3">연락처</th><th className="p-3">플랫폼</th><th className="p-3">상품/메모</th><th className="p-3">상태 변경</th></tr></thead>
+                                <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs tracking-wider border-b border-slate-200 sticky top-0 z-10 whitespace-nowrap">
+                                    <tr>
+                                        <th className="px-4 py-3">접수일</th>
+                                        <th className="px-4 py-3 text-indigo-600">담당자</th>
+                                        <th className="px-4 py-3">플랫폼</th>
+                                        <th className="px-4 py-3">이름</th>
+                                        <th className="px-4 py-3">연락처</th>
+                                        <th className="px-4 py-3 text-center">정책(만)</th>
+                                        <th className="px-4 py-3 text-center">지원(만)</th>
+                                        <th className="px-4 py-3 text-center">상태</th>
+                                        <th className="px-4 py-3">상품</th>
+                                        <th className="px-4 py-3">메모</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
                                     {displayedData.map(c => (
-                                        <tr key={c.id} className="border-b border-gray-100 hover:bg-indigo-50 transition">
-                                            <td className="p-3 text-gray-500">{c.upload_date}</td>
-                                            <td className="p-3 font-bold text-indigo-600">{getAgentName(c.owner)}</td>
-                                            <td className="p-3 font-bold">{c.name}</td>
-                                            <td className="p-3 text-gray-500">{c.phone}</td>
-                                            <td className="p-3"><span className="bg-gray-100 border border-gray-200 px-2 py-1 rounded text-xs text-gray-600">{c.platform}</span></td>
-                                            <td className="p-3 text-gray-600 truncate max-w-[200px]">{c.product_info}</td>
-                                            <td className="p-3">
-                                                <select className="bg-white border border-gray-300 rounded text-xs p-1 text-gray-700 font-bold outline-none focus:border-indigo-500" value={c.status} onChange={(e) => handleInlineUpdate(c.id, 'status', e.target.value)}>
+                                        <tr key={c.id} className="border-b border-slate-100 hover:bg-slate-50 transition duration-150">
+                                            {/* 1. 접수일 */}
+                                            <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{c.upload_date}</td>
+
+                                            {/* 2. 담당자 (관리자용) */}
+                                            <td className="px-4 py-3 font-bold text-indigo-600 whitespace-nowrap">{getAgentName(c.owner)}</td>
+
+                                            {/* 3. 플랫폼 */}
+                                            <td className="px-4 py-3 whitespace-nowrap">
+                                                <span className="bg-white border border-gray-200 px-2 py-1 rounded text-xs text-gray-600">{c.platform}</span>
+                                            </td>
+
+                                            {/* 4. 이름 */}
+                                            <td className="px-4 py-3 font-bold whitespace-nowrap">{c.name}</td>
+
+                                            {/* 5. 연락처 */}
+                                            <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{c.phone}</td>
+
+                                            {/* 6. 정책금 입력 (숫자만, 콤마 표시) */}
+                                            <td className="px-4 py-3 text-center">
+                                                <input
+                                                    type="text"
+                                                    className="w-16 bg-transparent text-right font-bold outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 transition px-1"
+                                                    placeholder="0"
+                                                    value={c.agent_policy ? Number(c.agent_policy).toLocaleString() : ''}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value.replace(/[^0-9]/g, '');
+                                                        handleInlineUpdate(c.id, 'agent_policy', val);
+                                                    }}
+                                                />
+                                            </td>
+
+                                            {/* 7. 지원금 입력 (숫자만, 콤마 표시) */}
+                                            <td className="px-4 py-3 text-center">
+                                                <input
+                                                    type="text"
+                                                    className="w-16 bg-transparent text-right font-bold outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 transition px-1"
+                                                    placeholder="0"
+                                                    value={c.support_amt ? Number(c.support_amt).toLocaleString() : ''}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value.replace(/[^0-9]/g, '');
+                                                        handleInlineUpdate(c.id, 'support_amt', val);
+                                                    }}
+                                                />
+                                            </td>
+
+                                            {/* 8. 상태 변경 */}
+                                            <td className="px-4 py-3 text-center">
+                                                <select
+                                                    className="bg-white border border-gray-300 rounded text-xs p-1.5 text-gray-700 font-bold outline-none focus:border-indigo-500 cursor-pointer"
+                                                    value={c.status}
+                                                    onChange={(e) => {
+                                                        const val = e.target.value;
+                                                        if (val === '접수취소') {
+                                                            if (window.confirm("접수를 취소하고 상담 목록으로 되돌리시겠습니까?")) {
+                                                                handleInlineUpdate(c.id, 'status', '미통건'); // 상담 목록으로 복귀
+                                                            }
+                                                        } else {
+                                                            handleInlineUpdate(c.id, 'status', val);
+                                                        }
+                                                    }}
+                                                >
                                                     <option value="접수완료">접수완료</option>
                                                     <option value="설치완료">✅ 설치완료</option>
-                                                    <option value="접수취소">🚫 취소 처리</option>
+                                                    <option value="접수취소">🚫 취소/반려</option>
                                                 </select>
+                                            </td>
+
+                                            {/* 9. 가입 상품 */}
+                                            <td className="px-4 py-3 text-xs text-gray-600 truncate max-w-[150px]" title={c.product_info}>
+                                                {c.product_info || '-'}
+                                            </td>
+
+                                            {/* 10. 메모 (상담이력) */}
+                                            <td className="px-4 py-3">
+                                                <textarea
+                                                    className="w-full bg-transparent border border-transparent hover:border-gray-300 focus:border-indigo-500 rounded p-1 outline-none text-sm transition resize-none leading-relaxed"
+                                                    rows={1}
+                                                    style={{ minHeight: '1.5rem', height: 'auto', width: '150px' }}
+                                                    defaultValue={c.last_memo}
+                                                    onInput={autoResizeTextarea}
+                                                    onBlur={(e) => handleInlineUpdate(c.id, 'last_memo', e.target.value)}
+                                                    placeholder="메모..."
+                                                />
                                             </td>
                                         </tr>
                                     ))}
-                                    {displayedData.length === 0 && <tr><td colSpan="7" className="p-10 text-center text-gray-400">접수완료된 건이 없습니다.</td></tr>}
+                                    {displayedData.length === 0 && <tr><td colSpan="10" className="p-10 text-center text-gray-400">접수완료된 건이 없습니다.</td></tr>}
                                 </tbody>
                             </table>
                         </div>
@@ -1146,25 +1665,72 @@ function AdminDashboard({ user, onLogout }) {
                 )}
 
                 {/* [설치 완료] */}
+                {/* [설치 완료] - 상담사 페이지 UI 적용 (설치일 수정/상태 변경 가능) */}
                 {activeTab === 'installation' && (
                     <div className="animate-fade-in">
                         <div className="flex justify-between items-center mb-4">
-                            <h2 className="text-xl font-bold flex items-center gap-2 text-gray-800">✅ 설치 완료 목록 <span className="text-sm font-normal text-gray-400">(현황 확인용)</span></h2>
-                            <select className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-gray-700 text-sm outline-none focus:border-indigo-500" value={salesAgentFilter} onChange={e => setSalesAgentFilter(e.target.value)}><option value="">👤 전체 상담사 보기</option>{agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}</select>
+                            <h2 className="text-xl font-bold flex items-center gap-2 text-gray-800">✅ 설치 완료 목록 <span className="text-sm font-normal text-gray-400">(현황 확인 및 관리)</span></h2>
+                            <select className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-gray-700 text-sm outline-none focus:border-indigo-500" value={salesAgentFilter} onChange={e => setSalesAgentFilter(e.target.value)}>
+                                <option value="">👤 전체 상담사 보기</option>
+                                {agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}
+                            </select>
                         </div>
                         <div className="max-h-[600px] overflow-y-auto border border-gray-200 rounded-lg">
                             <table className="w-full text-left text-sm text-gray-700">
-                                <thead className="bg-gray-100 sticky top-0 z-10 shadow-sm text-gray-500 font-bold uppercase text-xs"><tr><th className="p-3">접수일</th><th className="p-3 text-indigo-600">담당자</th><th className="p-3">고객명</th><th className="p-3">연락처</th><th className="p-3">상품</th><th className="p-3">설치일</th><th className="p-3">상태</th></tr></thead>
+                                <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs tracking-wider border-b border-slate-200 sticky top-0 z-10 whitespace-nowrap">
+                                    <tr>
+                                        <th className="px-4 py-3">접수일</th>
+                                        <th className="px-4 py-3 text-indigo-600">담당자</th>
+                                        <th className="px-4 py-3">고객명</th>
+                                        <th className="px-4 py-3">연락처</th>
+                                        <th className="px-4 py-3">상품</th>
+                                        <th className="px-4 py-3">설치일(수정)</th>
+                                        <th className="px-4 py-3">상태</th>
+                                    </tr>
+                                </thead>
                                 <tbody>
                                     {displayedData.map(c => (
-                                        <tr key={c.id} className="border-b border-gray-100 hover:bg-green-50 transition">
-                                            <td className="p-3 text-gray-500">{c.upload_date}</td>
-                                            <td className="p-3 font-bold text-indigo-600">{getAgentName(c.owner)}</td>
-                                            <td className="p-3 font-bold">{c.name}</td>
-                                            <td className="p-3 text-gray-500">{c.phone}</td>
-                                            <td className="p-3 text-gray-600 truncate max-w-[150px]">{c.product_info}</td>
-                                            <td className="p-3 text-blue-600 font-bold">{c.installed_date || '-'}</td>
-                                            <td className="p-3"><span className="bg-green-100 px-2 py-1 rounded text-xs text-green-700 border border-green-200 font-bold">설치완료</span></td>
+                                        <tr key={c.id} className="border-b border-slate-100 hover:bg-green-50 transition duration-150">
+                                            {/* 1. 접수일 */}
+                                            <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{c.upload_date}</td>
+
+                                            {/* 2. 담당자 */}
+                                            <td className="px-4 py-3 font-bold text-indigo-600 whitespace-nowrap">{getAgentName(c.owner)}</td>
+
+                                            {/* 3. 고객명 */}
+                                            <td className="px-4 py-3 font-bold whitespace-nowrap">{c.name}</td>
+
+                                            {/* 4. 연락처 */}
+                                            <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{c.phone}</td>
+
+                                            {/* 5. 상품 */}
+                                            <td className="px-4 py-3 text-gray-600 truncate max-w-[200px]" title={c.product_info}>
+                                                {c.product_info || '-'}
+                                            </td>
+
+                                            {/* 6. 설치일 (날짜 선택기) */}
+                                            <td className="px-4 py-3">
+                                                <input
+                                                    type="date"
+                                                    className="bg-transparent text-blue-600 font-bold text-sm outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded px-1 cursor-pointer"
+                                                    value={c.installed_date || ''}
+                                                    onChange={(e) => handleInlineUpdate(c.id, 'installed_date', e.target.value)}
+                                                />
+                                            </td>
+
+                                            {/* 7. 상태 변경 (되돌리기/해지 등) */}
+                                            <td className="px-4 py-3">
+                                                <select
+                                                    className="bg-white border border-gray-300 rounded text-xs p-1.5 text-gray-700 font-bold outline-none focus:border-indigo-500 cursor-pointer"
+                                                    value={c.status}
+                                                    onChange={(e) => handleInlineUpdate(c.id, 'status', e.target.value)}
+                                                >
+                                                    <option value="설치완료">✅ 설치완료</option>
+                                                    <option value="접수완료">↩️ 접수완료(되돌리기)</option>
+                                                    <option value="해지진행">⚠️ 해지진행</option>
+                                                    <option value="접수취소">🚫 접수취소</option>
+                                                </select>
+                                            </td>
                                         </tr>
                                     ))}
                                     {displayedData.length === 0 && <tr><td colSpan="7" className="p-10 text-center text-gray-400">설치 완료된 건이 없습니다.</td></tr>}
@@ -1184,7 +1750,7 @@ function AdminDashboard({ user, onLogout }) {
                                     <option value="ALL">📋 전체 상태</option>
                                     <option value="설치완료">✅ 설치완료 (정산대기)</option>
                                     <option value="접수완료">접수완료</option>
-                                    <option value="접수취소">취소/해지</option>
+                                    <option value="해지진행">⚠️ 해지진행</option>
                                 </select>
                                 <select className="bg-white border border-gray-300 rounded-lg px-3 py-1.5 text-gray-700 text-sm outline-none focus:border-indigo-500" value={salesAgentFilter} onChange={e => setSalesAgentFilter(e.target.value)}>
                                     <option value="">👤 전체 상담사</option>
@@ -1402,44 +1968,133 @@ function AdminDashboard({ user, onLogout }) {
             </div>
 
             {showUploadModal && <div className="fixed inset-0 bg-black/40 flex justify-center items-center backdrop-blur-sm z-50"><div className="bg-white p-8 rounded-2xl w-[600px] border border-gray-200 shadow-2xl animate-fade-in-up"><h2 className="text-2xl font-bold mb-4 text-indigo-900">📤 엑셀 복사 등록</h2><textarea placeholder="엑셀에서 복사한 내용을 붙여넣으세요... (이름 / 전화번호 / 플랫폼 / 메모)" className="w-full h-48 bg-gray-50 p-4 rounded-xl border border-gray-300 text-sm font-mono mb-6 text-gray-800 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition" value={pasteData} onChange={handlePaste} /><div className="flex justify-end gap-3"><button onClick={() => setShowUploadModal(false)} className="px-5 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-bold transition">취소</button><button onClick={handleBulkSubmit} className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-md transition">일괄 등록하기</button></div></div></div>}
-            {showCompletionModal && completionTarget && (<PopoutWindow title={`[접수완료] ${completionTarget.name} 고객님`} onClose={() => setShowCompletionModal(false)}><div className="bg-white h-full w-full flex flex-col font-sans"><div className="bg-indigo-600 p-4 flex justify-between items-center shrink-0"><h2 className="text-xl font-bold text-white flex items-center gap-2">📝 접수 완료 처리</h2><div className="text-indigo-200 text-sm">독립 윈도우 모드</div></div><div className="p-6 grid grid-cols-2 gap-8 flex-1 overflow-y-auto"><div className="flex flex-col gap-4 border-r border-gray-100 pr-6"><div><label className="block text-sm font-bold text-gray-700 mb-2">통신사 선택</label><div className="flex gap-2 overflow-x-auto pb-2">{Object.keys(policyData).map((pName) => (<button key={pName} onClick={() => { setSelectedPlatform(pName); setDynamicFormData({}); setCalculatedPolicy(0); }} className={`flex-1 py-3 px-2 rounded-xl font-bold border transition shadow-sm whitespace-nowrap ${selectedPlatform === pName ? 'bg-indigo-600 text-white border-indigo-600 ring-2 ring-indigo-200' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}>{pName}</button>))}</div></div><div className="bg-blue-50 p-4 rounded-xl border border-blue-100"><h3 className="font-bold text-blue-800 mb-2 text-sm">💡 고객 기본 정보</h3><div className="text-sm text-gray-600 space-y-1"><p><span className="w-16 inline-block font-bold">이름:</span> {completionTarget.name}</p><p><span className="w-16 inline-block font-bold">연락처:</span> {completionTarget.phone}</p></div></div><div className="bg-yellow-50 p-4 rounded-xl border border-yellow-100 text-center"><p className="text-xs text-yellow-700 font-bold mb-1">예상 정책금 (자동계산)</p><p className="text-3xl font-extrabold text-yellow-600">{calculatedPolicy} <span className="text-base text-yellow-500">만원</span></p></div></div><div className="flex flex-col h-full"><label className="block text-sm font-bold text-gray-700 mb-2">상품 상세 선택</label><div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4">
-                {/* ⭐️ 정책 데이터 기반 렌더링 */}
-                <div className="space-y-4">
-                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                        <label className="block text-xs font-bold text-gray-600 mb-2">인터넷 상품</label>
-                        <select className="w-full bg-white border border-gray-300 rounded-lg p-2 text-sm focus:border-indigo-500 outline-none" onChange={e => handleFormDataChange('internet', e.target.value)}>
-                            <option value="">선택하세요</option>
-                            {policyData[selectedPlatform]?.internet.map(p => <option key={p.id} value={p.name}>{p.name} ({p.policy}만)</option>)}
-                        </select>
-                    </div>
-                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                        <label className="block text-xs font-bold text-gray-600 mb-2">번들 상품</label>
-                        <select className="w-full bg-white border border-gray-300 rounded-lg p-2 text-sm focus:border-indigo-500 outline-none" onChange={e => handleFormDataChange('bundle', e.target.value)}>
-                            <option value="">선택하세요</option>
-                            {policyData[selectedPlatform]?.bundle.map(p => <option key={p.id} value={p.name}>{p.name} ({p.policy}만)</option>)}
-                        </select>
-                    </div>
-                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                        <label className="block text-xs font-bold text-gray-600 mb-2">추가 상품 (비용)</label>
-                        <div className="flex flex-wrap gap-2">
-                            {policyData[selectedPlatform]?.addon.map(p => (
-                                <label key={p.id} className="flex items-center gap-1 cursor-pointer bg-white px-3 py-1.5 rounded border border-gray-200 hover:border-indigo-300 transition">
-                                    <input type="checkbox" className="accent-indigo-600" onChange={(e) => handleFormDataChange(p.name, e.target.checked ? p.name : '')} />
-                                    <span className="text-xs">{p.name}</span>
-                                </label>
-                            ))}
+            {/* 접수 완료 모달 */}
+            {showCompletionModal && completionTarget && (
+                <PopoutWindow title={`[접수완료] ${completionTarget.name} 고객님`} onClose={() => setShowCompletionModal(false)}>
+                    {/* 메인 컨테이너 시작 */}
+                    <div className="bg-white h-full w-full flex flex-col font-sans">
+
+                        {/* 1. 헤더 */}
+                        <div className="bg-indigo-600 p-4 flex justify-between items-center shrink-0">
+                            <h2 className="text-xl font-bold text-white flex items-center gap-2">📝 접수 완료 처리</h2>
+                            <div className="text-indigo-200 text-sm">독립 윈도우 모드</div>
+                        </div>
+
+                        {/* 2. 본문 (스크롤 영역) */}
+                        <div className="p-6 grid grid-cols-2 gap-8 flex-1 overflow-y-auto">
+
+                            {/* 왼쪽 컬럼: 기본 정보 */}
+                            <div className="flex flex-col gap-4 border-r border-gray-100 pr-6">
+                                <div>
+                                    <label className="block text-sm font-bold text-gray-700 mb-2">통신사 선택</label>
+                                    <div className="flex gap-2 overflow-x-auto pb-2">
+                                        {Object.keys(policyData).map((pName) => (
+                                            <button
+                                                key={pName}
+                                                onClick={() => { setSelectedPlatform(pName); setDynamicFormData({}); setCalculatedPolicy(0); }}
+                                                className={`flex-1 py-3 px-2 rounded-xl font-bold border transition shadow-sm whitespace-nowrap 
+                                                ${selectedPlatform === pName ? 'bg-indigo-600 text-white border-indigo-600 ring-2 ring-indigo-200' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                                            >
+                                                {pName}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+                                <div className="bg-blue-50 p-4 rounded-xl border border-blue-100">
+                                    <h3 className="font-bold text-blue-800 mb-2 text-sm">💡 고객 기본 정보</h3>
+                                    <div className="text-sm text-gray-600 space-y-1">
+                                        <p><span className="w-16 inline-block font-bold">이름:</span> {completionTarget.name}</p>
+                                        <p><span className="w-16 inline-block font-bold">연락처:</span> {completionTarget.phone}</p>
+                                    </div>
+                                </div>
+                                <div className="bg-yellow-50 p-4 rounded-xl border border-yellow-100 text-center">
+                                    <p className="text-xs text-yellow-700 font-bold mb-1">예상 정책금 (자동계산)</p>
+                                    <p className="text-3xl font-extrabold text-yellow-600">{calculatedPolicy} <span className="text-base text-yellow-500">만원</span></p>
+                                </div>
+                            </div>
+
+                            {/* 오른쪽 컬럼: 상품 선택 */}
+                            <div className="flex flex-col h-full">
+                                <label className="block text-sm font-bold text-gray-700 mb-2">상품 상세 선택</label>
+                                <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-4">
+                                    <div className="space-y-4">
+                                        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                            <label className="block text-xs font-bold text-gray-600 mb-2">인터넷 상품</label>
+                                            <select className="w-full bg-white border border-gray-300 rounded-lg p-2 text-sm focus:border-indigo-500 outline-none" onChange={e => handleFormDataChange('internet', e.target.value)}>
+                                                <option value="">선택하세요</option>
+                                                {policyData[selectedPlatform]?.internet.map(p => <option key={p.id} value={p.name}>{p.name} ({p.policy}만)</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                            <label className="block text-xs font-bold text-gray-600 mb-2">번들 상품</label>
+                                            <select className="w-full bg-white border border-gray-300 rounded-lg p-2 text-sm focus:border-indigo-500 outline-none" onChange={e => handleFormDataChange('bundle', e.target.value)}>
+                                                <option value="">선택하세요</option>
+                                                {policyData[selectedPlatform]?.bundle.map(p => <option key={p.id} value={p.name}>{p.name} ({p.policy}만)</option>)}
+                                            </select>
+                                        </div>
+                                        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                            <label className="block text-xs font-bold text-gray-600 mb-2">추가 상품 (비용)</label>
+                                            <div className="flex flex-wrap gap-2">
+                                                {policyData[selectedPlatform]?.addon.map(p => (
+                                                    <label key={p.id} className="flex items-center gap-1 cursor-pointer bg-white px-3 py-1.5 rounded border border-gray-200 hover:border-indigo-300 transition">
+                                                        <input type="checkbox" className="accent-indigo-600" onChange={(e) => handleFormDataChange(p.name, e.target.checked ? p.name : '')} />
+                                                        <span className="text-xs">{p.name}</span>
+                                                    </label>
+                                                ))}
+                                            </div>
+                                        </div>
+                                        <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
+                                            <label className="block text-xs font-bold text-gray-600 mb-2">사은품 메모</label>
+                                            <input className="w-full bg-white border border-gray-300 rounded-lg p-2 text-sm focus:border-indigo-500 outline-none" onChange={e => handleFormDataChange('gift', e.target.value)} />
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* 3. 푸터 (버튼) */}
+                        <div className="p-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3 shrink-0">
+                            <button onClick={() => setShowCompletionModal(false)} className="px-6 py-3 rounded-xl bg-white border border-gray-300 text-gray-600 font-bold hover:bg-gray-100 transition">취소</button>
+                            <button onClick={handleConfirmCompletion} className="px-8 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 shadow-lg transition flex items-center gap-2"><span>✅ 접수 완료 및 이력 저장</span></button>
                         </div>
                     </div>
-                    <div className="bg-gray-50 p-3 rounded-lg border border-gray-200">
-                        <label className="block text-xs font-bold text-gray-600 mb-2">사은품 메모</label>
-                        <input className="w-full bg-white border border-gray-300 rounded-lg p-2 text-sm focus:border-indigo-500 outline-none" onChange={e => handleFormDataChange('gift', e.target.value)} />
-                    </div>
-                </div>
-            </div></div></div><div className="p-4 border-t border-gray-200 bg-gray-50 flex justify-end gap-3 shrink-0"><button onClick={() => setShowCompletionModal(false)} className="px-6 py-3 rounded-xl bg-white border border-gray-300 text-gray-600 font-bold hover:bg-gray-100 transition">취소</button><button onClick={handleConfirmCompletion} className="px-8 py-3 rounded-xl bg-indigo-600 text-white font-bold hover:bg-indigo-700 shadow-lg transition flex items-center gap-2"><span>✅ 접수 완료 및 이력 저장</span></button></div></div></PopoutWindow>)}
+                    {/* 메인 컨테이너 끝 */}
+                </PopoutWindow>
+            )}
             {memoPopupTarget && (<div className="fixed inset-0 bg-black/40 flex justify-center items-center backdrop-blur-sm z-50"><div className="bg-white p-6 rounded-2xl w-[400px] border border-gray-200 shadow-2xl animate-fade-in-up"><h2 className="text-lg font-bold mb-3 text-indigo-800 border-b border-gray-100 pb-2">{memoFieldType === 'additional_info' ? '📝 후처리 메모' : '💬 상담 내용 메모'}</h2><textarea ref={memoInputRef} className="w-full h-40 bg-gray-50 p-4 rounded-xl border border-gray-300 text-sm text-gray-800 resize-none outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition" value={memoPopupText} onChange={e => setMemoPopupText(e.target.value)} placeholder="내용을 입력하세요..." /><div className="flex justify-end gap-2 mt-4"><button onClick={() => setMemoPopupTarget(null)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-bold transition">취소</button><button onClick={saveMemoPopup} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-md transition">저장</button></div></div></div>)}
             {showResponseModal && responseTarget && (<div className="fixed inset-0 bg-black/40 flex justify-center items-center backdrop-blur-sm z-50"><div className="bg-white p-6 rounded-2xl w-[400px] border border-gray-200 shadow-2xl animate-fade-in-up"><h2 className="text-xl font-bold mb-4 text-indigo-900 border-b border-gray-100 pb-2 flex items-center gap-2">🔔 관리자 확인 요청</h2><div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200 mb-6"><span className="text-xs font-bold text-yellow-700 block mb-1">요청 내용:</span><p className="text-sm text-gray-800 font-medium">{responseTarget.request_message || "내용 없음"}</p></div><div className="flex flex-col gap-3"><button onClick={() => handleResponse('PROCESSING')} className="w-full py-3 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-xl font-bold transition flex items-center justify-center gap-2">🚧 지금 확인 중입니다</button><button onClick={() => handleResponse('COMPLETED')} className="w-full py-3 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold shadow-md transition flex items-center justify-center gap-2">✅ 처리 완료했습니다</button></div><div className="mt-4 text-center"><button onClick={() => setShowResponseModal(false)} className="text-xs text-gray-400 hover:text-gray-600">닫기</button></div></div></div>)}
             {showRequestModal && requestTarget && (<div className="fixed inset-0 bg-black/40 flex justify-center items-center backdrop-blur-sm z-50"><div className="bg-white p-6 rounded-2xl w-[400px] border border-gray-200 shadow-2xl animate-fade-in-up"><h2 className="text-xl font-bold mb-4 text-indigo-900 border-b border-gray-100 pb-2 flex items-center gap-2">🔔 관리자 확인 요청</h2><textarea className="w-full h-32 bg-gray-50 p-3 rounded-lg border border-gray-300 text-sm outline-none resize-none mb-4 focus:border-indigo-500 transition" placeholder="요청 사항을 입력하세요..." value={requestMessage} onChange={(e) => setRequestMessage(e.target.value)} /><div className="flex justify-end gap-2"><button onClick={() => setShowRequestModal(false)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-bold transition">취소</button><button onClick={sendRequest} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-md transition">요청 보내기</button></div></div></div>)}
             {showCustomModal && (<PopoutWindow title="🎨 통계 화면 커스터마이징" onClose={() => setShowCustomModal(false)}><div className="bg-white h-full flex flex-col p-6"><h2 className="text-xl font-bold mb-6 flex items-center gap-2"><span>👁️</span> 표시할 항목 선택</h2><div className="mb-8"><h3 className="font-bold text-gray-800 mb-4 border-b border-gray-100 pb-2">📋 테이블 컬럼</h3><div className="grid grid-cols-3 gap-4">{Object.keys(INITIAL_VISIBLE_COLUMNS).map(col => (<label key={col} className="flex items-center gap-2 p-3 rounded-lg border border-gray-100 bg-gray-50 hover:bg-white hover:shadow-sm cursor-pointer transition"><input type="checkbox" className="w-5 h-5 accent-indigo-600 rounded" checked={visibleColumns[col]} onChange={() => handleColumnToggle(col)} /><span className="text-sm font-medium text-gray-700">{col === 'owner_name' ? '담당자' : col === 'db' ? '디비' : col === 'accepted' ? '접수' : col === 'installed' ? '설치' : col === 'canceled' ? '취소' : col === 'adSpend' ? '광고비' : col === 'acceptedRevenue' ? '접수매출' : col === 'installedRevenue' ? '설치매출' : col === 'netProfit' ? '순이익' : col === 'acceptRate' ? '접수율' : col === 'cancelRate' ? '취소율' : col === 'netInstallRate' ? '순청약율' : '평균마진'}</span></label>))}</div></div><div><h3 className="font-bold text-gray-800 mb-4 border-b border-gray-100 pb-2">📊 상단 지표 카드</h3><div className="grid grid-cols-2 gap-4">{Object.keys(INITIAL_VISIBLE_CARDS).map(card => (<label key={card} className="flex items-center gap-2 p-3 rounded-lg border border-gray-100 bg-gray-50 hover:bg-white hover:shadow-sm cursor-pointer transition"><input type="checkbox" className="w-5 h-5 accent-blue-600 rounded" checked={visibleCards[card]} onChange={() => handleCardToggle(card)} /><span className="text-sm font-medium text-gray-700">{card === 'adSpend' ? '💰 총 광고비' : card === 'acceptedRevenue' ? '📝 접수완료매출' : card === 'installedRevenue' ? '✅ 설치완료매출' : card === 'netProfit' ? '🎯 순이익' : card === 'totalDB' ? '📊 총 디비건수' : card === 'acceptedCount' ? '📋 접수건수' : card === 'installCount' ? '✨ 설치건수' : card === 'cancelRate' ? '⚠️ 취소율' : '🎉 순청약율'}</span></label>))}</div></div><div className="mt-auto pt-6 border-t border-gray-100 flex justify-end"><button onClick={() => setShowCustomModal(false)} className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold shadow-md transition">설정 완료</button></div></div></PopoutWindow>)}
+
+            {/* 🟢 [추가] 실패 사유 선택 모달 */}
+            {showFailModal && failTarget && (
+                <div className="fixed inset-0 bg-black/50 z-[9999] flex justify-center items-center backdrop-blur-sm animate-fade-in">
+                    <div className="bg-white p-6 rounded-2xl w-96 border border-gray-200 shadow-2xl">
+                        <h3 className="text-xl font-bold text-red-600 mb-4 flex items-center gap-2">🚫 실패 처리</h3>
+                        <div className="bg-red-50 p-3 rounded-lg mb-4">
+                            <p className="text-sm text-gray-700 font-bold mb-1">{failTarget.name} 고객님</p>
+                            <p className="text-xs text-gray-500">실패 사유를 선택하면 'AS/실패' 탭으로 이동됩니다.</p>
+                        </div>
+                        <div className="mb-6">
+                            <label className="block text-sm font-bold text-gray-700 mb-2">실패 사유 선택</label>
+                            <select
+                                className="w-full p-3 border border-gray-300 rounded-xl outline-none focus:border-red-500"
+                                value={selectedFailReason}
+                                onChange={(e) => setSelectedFailReason(e.target.value)}
+                            >
+                                <option value="">-- 사유를 선택하세요 --</option>
+                                {reasons.map((r) => (
+                                    <option key={r.id} value={r.reason}>{r.reason}</option>
+                                ))}
+                            </select>
+                        </div>
+                        <div className="flex justify-end gap-2">
+                            <button onClick={() => { setShowFailModal(false); setFailTarget(null); }} className="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold hover:bg-gray-200">취소</button>
+                            <button onClick={handleConfirmFail} className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-md">확인 및 저장</button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
