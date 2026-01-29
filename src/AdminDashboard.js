@@ -2475,6 +2475,8 @@ function AdminDashboard({ user, onLogout }) {
         handleInlineUpdate(id, 'status', newStatus);
     };
 
+
+
     // 🟢 [추가] 실패 확정 핸들러
     const handleConfirmFail = () => {
         if (!failTarget) return;
@@ -2624,6 +2626,18 @@ function AdminDashboard({ user, onLogout }) {
             setIsSending(false);
         }
     };
+
+    // 🟢 채팅방 내부 자동 새로고침(Polling) 추가
+    useEffect(() => {
+        let interval;
+        if (isChatOpen && chatTarget && chatView === 'ROOM') {
+            // 5초마다 대화 내역을 새로 불러옴
+            interval = setInterval(() => {
+                fetchChatHistory(chatTarget.id);
+            }, 5000);
+        }
+        return () => clearInterval(interval); // 채팅창 닫으면 중지
+    }, [isChatOpen, chatTarget, chatView]);
     const handleCreateAgent = () => { fetch(`${API_BASE}/api/agents/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(newAgent) }).then(res => { if (res.ok) { alert("완료"); setNewAgent({ username: '', password: '' }); fetchAgents(); } else res.json().then(d => alert(d.message)); }); };
     const handleDeleteAgent = (id, name) => { if (window.confirm(`'${name}' 삭제?`)) fetch(`${API_BASE}/api/agents/${id}/`, { method: 'DELETE', headers: getAuthHeaders() }).then(() => { alert("삭제 완료"); fetchAgents(); }); };
     const renderInteractiveStars = (id, currentRank) => (
