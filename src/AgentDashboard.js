@@ -287,6 +287,71 @@ function AgentDashboard({ user, onLogout }) {
     const [selectedCustomer, setSelectedCustomer] = useState(null);
     const [newLog, setNewLog] = useState('');
 
+
+    // 🆕 [추가] 스크롤 감지하여 자동으로 보이기/숨기기 처리
+    const lastScrollY = useRef(0); // 마지막 스크롤 위치 저장
+
+    useEffect(() => {
+        const handleScroll = () => {
+            const currentScrollY = window.scrollY;
+
+            // 1. 스크롤을 내리는 중이고, 50px 이상 내려갔을 때 -> 숨김
+            if (currentScrollY > lastScrollY.current && currentScrollY > 50) {
+                setIsTopStatsVisible(false);
+            }
+            // 2. 스크롤을 올리는 중 -> 보이기
+            else if (currentScrollY < lastScrollY.current) {
+                setIsTopStatsVisible(true);
+            }
+
+            lastScrollY.current = currentScrollY;
+        };
+
+        window.addEventListener("scroll", handleScroll, { passive: true });
+        return () => window.removeEventListener("scroll", handleScroll);
+    }, []);
+
+    // 💾 [신규] 메모 리스트 저장용 State (로컬 스토리지 연동)
+    const [savedMemos, setSavedMemos] = useState(() => {
+        try {
+            const saved = localStorage.getItem(`agent_memo_list_${user?.user_id}`);
+            return saved ? JSON.parse(saved) : [];
+        } catch { return []; }
+    });
+
+    // 💾 [신규] 리스트 변경 시 자동 저장
+    useEffect(() => {
+        if (user?.user_id) {
+            localStorage.setItem(`agent_memo_list_${user.user_id}`, JSON.stringify(savedMemos));
+        }
+    }, [savedMemos, user]);
+
+    // 💾 [신규] 현재 내용을 리스트에 저장하는 함수
+    const handleSaveMemoToList = () => {
+        if (!notepadContent.trim()) return alert("내용이 없습니다.");
+        const newMemo = {
+            id: Date.now(),
+            content: notepadContent,
+            date: new Date().toLocaleString()
+        };
+        setSavedMemos([newMemo, ...savedMemos]); // 최신순 저장
+        alert("리스트에 저장되었습니다!");
+    };
+
+    // 💾 [신규] 리스트에서 삭제 함수
+    const handleDeleteMemo = (id) => {
+        if (window.confirm("삭제하시겠습니까?")) {
+            setSavedMemos(prev => prev.filter(m => m.id !== id));
+        }
+    };
+
+    // 💾 [신규] 리스트 내용 불러오기 함수
+    const handleLoadMemo = (content) => {
+        if (window.confirm("현재 작성 중인 내용이 사라집니다. 불러오시겠습니까?")) {
+            setNotepadContent(content);
+        }
+    };
+
     // ⭐️ [신규] 상단 실시간 지표 숨기기 토글
     const [isTopStatsVisible, setIsTopStatsVisible] = useState(true);
 
@@ -964,7 +1029,6 @@ function AgentDashboard({ user, onLogout }) {
                 <h1 className="text-xl font-extrabold text-indigo-900 flex items-center gap-2 tracking-tight">📞 {user.username}님의 워크스페이스</h1>
                 {/* ⭐️ [추가] 실시간 현황판 토글 */}
                 <div className="flex items-center gap-6">
-                    <button onClick={() => setIsTopStatsVisible(!isTopStatsVisible)} className={`text-xs font-bold px-3 py-1.5 rounded-full border transition ${isTopStatsVisible ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200'}`}>📊 현황판 {isTopStatsVisible ? 'ON' : 'OFF'}</button>
 
                     {/* ⭐️ 상단 채팅 아이콘 */}
                     <div className="relative cursor-pointer" onClick={() => handleOpenChatGlobal()}>
@@ -1464,11 +1528,76 @@ function AgentDashboard({ user, onLogout }) {
                     </div>
                 )}
 
-                {/* ⭐️ [수정됨] 개인 메모장 탭 (기능 복구) */}
+                {/* ⭐️ [수정됨] 개인 메모장 탭 (좌우 2분할 레이아웃) */}
                 {activeTab === 'notepad' && (
                     <div className="h-full flex flex-col animate-fade-in">
-                        <div className="flex justify-between items-center mb-4"><h2 className="text-xl font-bold flex items-center gap-2 text-indigo-800">📝 나만의 업무 노트 <span className="text-xs font-normal text-gray-400">(자동 저장됨)</span></h2></div>
-                        <div className="flex-1 bg-yellow-50 rounded-xl border border-yellow-200 p-6 shadow-inner relative h-[600px]"><textarea className="w-full h-full bg-transparent outline-none resize-none text-gray-800 leading-relaxed text-base font-medium placeholder-yellow-400/50 focus:ring-0" placeholder="통화 중 필요한 메모나 할 일을 자유롭게 적어두세요..." value={notepadContent} onChange={handleNotepadChange} spellCheck="false" /></div>
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-bold flex items-center gap-2 text-indigo-800">
+                                📝 나만의 업무 노트 <span className="text-xs font-normal text-gray-400">(좌측: 작성 / 우측: 저장함)</span>
+                            </h2>
+                            {/* 저장 버튼 추가 */}
+                            <button
+                                onClick={handleSaveMemoToList}
+                                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-sm transition shadow-sm flex items-center gap-2"
+                            >
+                                💾 현재 내용 리스트에 저장
+                            </button>
+                        </div>
+
+                        {/* ▼ 전체 컨테이너 높이 설정 (h-[75vh]) 후 Flex로 좌우 나눔 ▼ */}
+                        <div className="flex gap-6 h-[75vh]">
+
+                            {/* 👈 왼쪽: 메모 작성 영역 (flex-1로 남은 공간 차지) */}
+                            <div className="flex-1 bg-yellow-50 rounded-xl border border-yellow-200 p-6 shadow-inner relative h-full flex flex-col">
+                                <textarea
+                                    className="w-full h-full bg-transparent outline-none resize-none text-gray-800 leading-relaxed text-base font-medium placeholder-yellow-400/50 focus:ring-0 custom-scrollbar"
+                                    placeholder="여기에 메모를 작성하세요..."
+                                    value={notepadContent}
+                                    onChange={handleNotepadChange}
+                                    spellCheck="false"
+                                />
+                                <div className="text-right text-xs text-yellow-500 mt-2 font-bold">
+                                    * 작성 중인 내용은 자동 임시저장 됩니다.
+                                </div>
+                            </div>
+
+                            {/* 👉 오른쪽: 저장된 리스트 영역 (w-1/3 로 너비 고정) */}
+                            <div className="w-1/3 bg-white rounded-xl border border-gray-200 shadow-sm flex flex-col h-full overflow-hidden">
+                                <div className="p-4 bg-gray-50 border-b border-gray-200 font-bold text-gray-700 flex justify-between items-center">
+                                    <span>📂 저장된 메모 ({savedMemos.length})</span>
+                                </div>
+
+                                <div className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+                                    {savedMemos.length === 0 ? (
+                                        <div className="text-center text-gray-400 mt-10 text-sm">
+                                            저장된 메모가 없습니다.
+                                        </div>
+                                    ) : (
+                                        savedMemos.map(memo => (
+                                            <div key={memo.id} className="bg-yellow-50 border border-yellow-100 p-3 rounded-lg hover:shadow-md transition group relative">
+                                                <div className="text-[10px] text-gray-400 mb-1">{memo.date}</div>
+                                                <div
+                                                    className="text-sm text-gray-800 font-medium line-clamp-3 cursor-pointer hover:text-indigo-600"
+                                                    onClick={() => handleLoadMemo(memo.content)}
+                                                    title="클릭하여 불러오기"
+                                                >
+                                                    {memo.content}
+                                                </div>
+                                                {/* 삭제 버튼 (hover시 표시) */}
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleDeleteMemo(memo.id); }}
+                                                    className="absolute top-2 right-2 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"
+                                                    title="삭제"
+                                                >
+                                                    ✕
+                                                </button>
+                                            </div>
+                                        ))
+                                    )}
+                                </div>
+                            </div>
+
+                        </div>
                     </div>
                 )}
 
