@@ -1357,6 +1357,50 @@ function AdminDashboard({ user, onLogout }) {
         </div>
     );
 
+
+    // 📱 연동 테스트 모달 및 설정 State
+    const [showMobileModal, setShowMobileModal] = useState(false);
+    const [testPhoneNumber, setTestPhoneNumber] = useState("");
+    const [smsConfig, setSmsConfig] = useState(() => {
+        const saved = localStorage.getItem('sms_gateway_config');
+        return saved ? JSON.parse(saved) : {
+            url: "https://api.sms-gate.app/message",
+            username: "",
+            password: ""
+        };
+    });
+
+    // 설정 변경 시 로컬 스토리지 자동 저장
+    useEffect(() => {
+        localStorage.setItem('sms_gateway_config', JSON.stringify(smsConfig));
+    }, [smsConfig]);
+
+
+    const handleExecuteMobileTest = async () => {
+        if (!smsConfig.username || !smsConfig.password || !testPhoneNumber) {
+            return alert("기기 정보와 테스트할 핸드폰 번호를 모두 입력해주세요.");
+        }
+
+        try {
+            const res = await fetch(`${API_BASE}/api/sms/test_connection/`, {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({
+                    phone: testPhoneNumber.replace(/[^0-9]/g, ''),
+                    gateway_config: smsConfig
+                })
+            });
+
+            const data = await res.json();
+            if (res.ok) {
+                alert("🚀 테스트 신호 발송 성공!\n입력하신 번호로 문자가 오는지 확인하세요.");
+            } else {
+                alert(`❌ 연동 실패: ${data.message}`);
+            }
+        } catch (e) {
+            alert("서버 통신 오류가 발생했습니다.");
+        }
+    };
     // 🟢 [수정] 플랫폼 필터 (platformList State 사용)
     const renderPlatformFilter = () => (
         <div className="flex flex-wrap gap-1 items-center mr-2 bg-gray-100 p-1 rounded-lg border border-gray-200">
@@ -1388,6 +1432,36 @@ function AdminDashboard({ user, onLogout }) {
             <span>{sortOrder === 'asc' ? '⬆️ 오래된순' : '⬇️ 최신순'}</span>
         </button>
     );
+
+
+    // 🔵 [수정] 연동 테스트 버튼 핸들러
+    const handleMobileTest = async () => {
+        const testNumber = prompt("테스트 문자를 수신할 번호를 입력하세요 (- 제외):");
+        if (!testNumber) return;
+
+        try {
+            const res = await fetch(`${API_BASE}/api/sms/test_connection/`, {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({
+                    phone: testNumber.replace(/[^0-9]/g, ''),
+                    gateway_config: smsConfig // ⭐️ 현재 입력된 URL, ID, PW를 백엔드로 전송
+                })
+            });
+
+            const data = await res.json();
+            if (res.ok) alert("🚀 테스트 신호 발송 성공! 앱의 발송 이력을 확인하세요.");
+            else alert(`❌ 연동 실패: ${data.message}`);
+        } catch (e) {
+            alert("서버 통신 오류가 발생했습니다.");
+        }
+    };
+
+    // 🟢 [신규] 설정값 서버 저장 (선택 사항)
+    const handleSaveSmsGateway = async () => {
+        alert("✅ 브라우저와 연동 설정이 임시 저장되었습니다.\n테스트 버튼으로 연동 상태를 확인해 보세요.");
+        // 필요 시 백엔드 DB에도 영구 저장하는 API를 호출할 수 있습니다.
+    };
 
     // -------------------------------------------------------------------------
     // 🟢 [장기 가망 관리] 고급 폴더 시스템 상태
@@ -2504,6 +2578,7 @@ function AdminDashboard({ user, onLogout }) {
             // 2. FormData 객체 생성 (파일 전송을 위해 필수)
             const formData = new FormData();
             formData.append('customer_id', chatTarget.id);
+            formData.append('gateway_config', JSON.stringify(smsConfig));
 
             if (msg?.trim()) {
                 formData.append('message', msg);
@@ -2604,49 +2679,112 @@ function AdminDashboard({ user, onLogout }) {
         background: transparent;
     }
 `}</style>
-            <header className="flex justify-between items-center bg-white p-4 rounded-xl shadow-sm mb-6 border border-gray-200 sticky top-0 z-40">
-                <h1 className="text-xl font-extrabold text-indigo-900 flex items-center gap-2">👑 관리자 대시보드</h1>
+            <header className="flex justify-between items-center bg-white px-6 py-4 rounded-2xl shadow-sm mb-6 border border-gray-200 sticky top-0 z-40 backdrop-blur-md bg-white/90">
 
-                <button
-                    onClick={() => {
-                        setViewerPlatform('KT'); // 열 때 기본값 KT로 초기화
-                        setShowPolicyViewer(true);
-                        fetchNoticesAndPolicies(); // 최신 이미지 데이터 갱신
-                    }}
-                    className="bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1 shadow-sm"
-                    title="새 창으로 정책표 열기"
-                >
-                    🖼️ 정책표 뷰어
-                </button>
-
-                {/* ... (헤더 내용은 동일) ... */}
+                {/* [LEFT] 타이틀 & 주요 도구 버튼군 */}
                 <div className="flex items-center gap-6">
+                    <h1 className="text-xl font-black text-indigo-900 flex items-center gap-2 shrink-0">
+                        <span className="bg-indigo-600 text-white w-8 h-8 flex items-center justify-center rounded-lg shadow-indigo-200 shadow-lg">👑</span>
+                        관리자 대시보드
+                    </h1>
+
+                    <div className="h-6 w-px bg-gray-200 mx-2 hidden md:block"></div>
+
+                    <div className="flex items-center gap-2">
+                        {/* 🖼️ 정책표 뷰어 (타이틀 옆으로 이동) */}
+                        <button
+                            onClick={() => {
+                                setViewerPlatform('KT');
+                                setShowPolicyViewer(true);
+                                fetchNoticesAndPolicies();
+                            }}
+                            className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+                        >
+                            <span className="text-sm">🖼️</span> 정책 뷰어
+                        </button>
+
+                        {/* 📱 핸드폰 연동 테스트 (신규) */}
+                        <button
+                            onClick={() => setShowMobileModal(true)}
+                            className="bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
+                        >
+                            <span className="text-sm">📱</span> 연동 테스트
+                        </button>
+                    </div>
+                </div>
+
+                {/* [RIGHT] 유틸리티 및 시스템 버튼군 */}
+                <div className="flex items-center gap-4">
+
+                    {/* 상단 현황판 토글 */}
                     <button
                         onClick={() => setIsTopStatsVisible(!isTopStatsVisible)}
-                        className={`text-xs font-bold px-3 py-1.5 rounded-full border transition 
-                        ${isTopStatsVisible ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200'}`}
+                        className={`flex items-center gap-1.5 text-[11px] font-bold px-3 py-1.5 rounded-full border transition-all shadow-sm
+            ${isTopStatsVisible ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
                     >
-                        📊 현황판 {isTopStatsVisible ? 'ON' : 'OFF'}
+                        📊 {isTopStatsVisible ? '현황판 숨기기' : '현황판 보기'}
                     </button>
 
-                    {/* 🟢 [수정] 문자 전송 아이콘 */}
-                    <div className="relative cursor-pointer" onClick={() => handleOpenChatGlobal()}>
-                        <span className="text-2xl text-gray-400 hover:text-indigo-500 transition" title="문자 전송 및 목록">💬</span>
+                    <div className="flex items-center gap-1 bg-gray-50 p-1 rounded-xl border border-gray-100">
+                        {/* 문자(채팅) 아이콘 */}
+                        <button
+                            onClick={() => handleOpenChatGlobal()}
+                            className="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-white hover:text-indigo-600 text-gray-400 transition relative"
+                            title="메시지 관리"
+                        >
+                            <span className="text-xl">💬</span>
+                        </button>
+
+                        {/* 알림 아이콘 */}
+                        <div className="relative">
+                            <button
+                                onClick={(e) => { e.stopPropagation(); setShowNotiDropdown(!showNotiDropdown); }}
+                                className={`w-10 h-10 flex items-center justify-center rounded-lg transition relative ${showNotiDropdown ? 'bg-white text-yellow-500 shadow-sm' : 'text-gray-400 hover:bg-white hover:text-yellow-500'}`}
+                            >
+                                <span className="text-xl">🔔</span>
+                                {notifications.length > 0 && (
+                                    <span className="absolute top-2 right-2 bg-red-500 text-white text-[9px] font-black px-1.5 rounded-full border-2 border-white animate-pulse">
+                                        {notifications.length}
+                                    </span>
+                                )}
+                            </button>
+
+                            {/* 알림 드롭다운 (기존 코드 유지) */}
+                            {showNotiDropdown && (
+                                <div className="absolute right-0 top-12 w-80 bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-hidden z-50 animate-fade-in-down">
+                                    <div className="bg-indigo-50 p-4 border-b border-gray-200 font-bold flex justify-between text-indigo-900 text-sm">
+                                        <span>⏰ 재통화 알림</span>
+                                        <button className="text-xs text-gray-400" onClick={() => setShowNotiDropdown(false)}>닫기</button>
+                                    </div>
+                                    <div className="max-h-60 overflow-y-auto">
+                                        {notifications.length === 0 ? (
+                                            <div className="p-8 text-center text-gray-400 text-sm italic">대기중인 알림이 없습니다.</div>
+                                        ) : (
+                                            notifications.map(n => (
+                                                <div key={n.id} onClick={() => openHistoryModal(n)} className="p-4 border-b border-gray-50 hover:bg-slate-50 cursor-pointer flex justify-between items-center transition">
+                                                    <div>
+                                                        <div className="font-bold text-sm text-gray-800">{n.name}</div>
+                                                        <div className="text-[11px] text-gray-400 font-mono">{n.phone}</div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${getBadgeStyle(n.status)}`}>{n.status}</span>
+                                                        <div className="text-[10px] text-indigo-500 font-bold mt-1">{formatCallback(n.callback_schedule)}</div>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
-                    <div className="relative cursor-pointer" onClick={(e) => { e.stopPropagation(); setShowNotiDropdown(!showNotiDropdown); }}>
-                        <span className="text-2xl text-gray-400 hover:text-yellow-500 transition">🔔</span>
-                        {notifications.length > 0 && <span className="absolute -top-1 -right-2 bg-red-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full animate-bounce shadow-sm">{notifications.length}</span>}
-                        {showNotiDropdown && (
-                            <div className="absolute right-0 top-10 w-80 bg-white border border-gray-200 rounded-xl shadow-xl overflow-hidden z-50">
-                                <div className="bg-indigo-50 p-3 border-b border-gray-200 font-bold flex justify-between text-indigo-900"><span>⏰ 재통화 알림 ({notifications.length})</span><button className="text-xs text-gray-400 hover:text-gray-600" onClick={() => setShowNotiDropdown(false)}>닫기</button></div>
-                                <div className="max-h-60 overflow-y-auto">{notifications.length === 0 ? <div className="p-4 text-center text-gray-400 text-sm">예정된 통화가 없습니다.</div> : notifications.map(n => (<div key={n.id} onClick={() => openHistoryModal(n)} className="p-3 border-b border-gray-100 hover:bg-gray-50 cursor-pointer flex justify-between items-center"><div><div className="font-bold text-sm text-gray-800">{n.name}</div><div className="text-xs text-gray-500">{n.phone}</div></div><div className="text-right"><span className={`text-[10px] ${getBadgeStyle(n.status)}`}>{n.status}</span><div className="text-xs text-gray-400 mt-1">{formatCallback(n.callback_schedule)}</div></div></div>))}</div>
-                            </div>
-                        )}
-                    </div>
-                    <div className="flex gap-2">
-                        <button onClick={onLogout} className="bg-slate-400 hover:bg-slate-500 text-white px-4 py-2 rounded-lg font-bold transition shadow-sm">로그아웃</button>
-                    </div>
+                    <button
+                        onClick={onLogout}
+                        className="ml-2 bg-slate-800 hover:bg-black text-white px-5 py-2.5 rounded-xl text-xs font-bold transition shadow-lg flex items-center gap-2"
+                    >
+                        <span>🚪</span> 로그아웃
+                    </button>
                 </div>
             </header>
 
@@ -6247,6 +6385,91 @@ function AdminDashboard({ user, onLogout }) {
                         </div>
                     </div>
                 </PopoutWindow>
+            )}
+
+            {/* 📱 연동 테스트 및 기기 설정 통합 모달 */}
+            {showMobileModal && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex justify-center items-center animate-fade-in">
+                    <div className="bg-white rounded-3xl shadow-2xl w-[480px] overflow-hidden border border-gray-200">
+                        {/* 헤더 */}
+                        <div className="bg-indigo-600 p-5 text-white flex justify-between items-center">
+                            <div>
+                                <h3 className="text-lg font-black flex items-center gap-2">
+                                    <span>📱</span> 기기 연동 실시간 설정
+                                </h3>
+                                <p className="text-indigo-100 text-[10px] opacity-80">SMSGate 앱 정보를 입력하고 테스트하세요.</p>
+                            </div>
+                            <button onClick={() => setShowMobileModal(false)} className="text-white/70 hover:text-white text-2xl">×</button>
+                        </div>
+
+                        {/* 본문 */}
+                        <div className="p-6 space-y-5 bg-slate-50">
+                            {/* 기기 정보 입력 구역 */}
+                            <div className="space-y-3 bg-white p-4 rounded-2xl border border-gray-200 shadow-sm">
+                                <div>
+                                    <label className="block text-[10px] font-black text-indigo-400 uppercase mb-1 ml-1">Gateway API URL</label>
+                                    <input
+                                        type="text"
+                                        className="w-full p-2.5 border border-gray-200 rounded-xl text-xs font-mono bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all"
+                                        placeholder="https://api.sms-gate.app/message"
+                                        value={smsConfig.url}
+                                        onChange={(e) => setSmsConfig({ ...smsConfig, url: e.target.value })}
+                                    />
+                                </div>
+                                <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                        <label className="block text-[10px] font-black text-indigo-400 uppercase mb-1 ml-1">Cloud Username</label>
+                                        <input
+                                            type="text"
+                                            className="w-full p-2.5 border border-gray-200 rounded-xl text-xs font-bold text-indigo-600 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all"
+                                            placeholder="예: VSZQ5C"
+                                            value={smsConfig.username}
+                                            onChange={(e) => setSmsConfig({ ...smsConfig, username: e.target.value })}
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-[10px] font-black text-indigo-400 uppercase mb-1 ml-1">Cloud Password</label>
+                                        <input
+                                            type="password"
+                                            className="w-full p-2.5 border border-gray-200 rounded-xl text-xs bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all"
+                                            placeholder="Password"
+                                            value={smsConfig.password}
+                                            onChange={(e) => setSmsConfig({ ...smsConfig, password: e.target.value })}
+                                        />
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 테스트 번호 입력 구역 */}
+                            <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 shadow-sm">
+                                <label className="block text-[10px] font-black text-orange-400 uppercase mb-1 ml-1">테스트 수신 번호</label>
+                                <input
+                                    type="text"
+                                    className="w-full p-3 border-2 border-orange-200 rounded-xl text-base font-black text-orange-600 outline-none focus:border-orange-400 transition-all bg-white"
+                                    placeholder="01012345678"
+                                    value={testPhoneNumber}
+                                    onChange={(e) => setTestPhoneNumber(e.target.value)}
+                                />
+                            </div>
+                        </div>
+
+                        {/* 푸터 버튼 */}
+                        <div className="p-4 bg-white border-t border-gray-100 flex gap-2">
+                            <button
+                                onClick={() => setShowMobileModal(false)}
+                                className="flex-1 py-3 text-xs font-bold text-gray-400 hover:text-gray-600 transition"
+                            >
+                                취소
+                            </button>
+                            <button
+                                onClick={handleExecuteMobileTest}
+                                className="flex-[2] bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl font-black text-sm shadow-lg transition-all active:scale-95 flex justify-center items-center gap-2"
+                            >
+                                🚀 연동 테스트 시작
+                            </button>
+                        </div>
+                    </div>
+                </div>
             )}
         </div>
     );
