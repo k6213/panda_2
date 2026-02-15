@@ -80,7 +80,7 @@
               "RelativeDocumentMoniker": "src\\AgentDashboard.js",
               "ToolTip": "C:\\Users\\zxdcf\\Auto\\panda\\frontend\\src\\AgentDashboard.js",
               "RelativeToolTip": "src\\AgentDashboard.js",
-              "ViewState": "AgIAAGgQAAAAAAAAAAAEwHYQAABlAAAAAAAAAA==",
+              "ViewState": "AgIAAGgQAAAAAAAAAAAEwHcQAABlAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001646|",
               "WhenOpened": "2025-12-13T05:11:07.961Z",
               "EditorCaption": ""
@@ -155,7 +155,8 @@
               "RelativeToolTip": "src\\App.js",
               "ViewState": "AgIAAAAAAAAAAAAAAAAAAAwAAAAVAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.001646|",
-              "WhenOpened": "2025-12-07T08:59:10.239Z"
+              "WhenOpened": "2025-12-07T08:59:10.239Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
@@ -167,7 +168,8 @@
               "RelativeToolTip": "src\\LeadCapture.jsx",
               "ViewState": "AgIAACYAAAAAAAAAAAAYwEAAAAAbAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.003663|",
-              "WhenOpened": "2025-12-23T06:16:04.266Z"
+              "WhenOpened": "2025-12-23T06:16:04.266Z",
+              "EditorCaption": ""
             },
             {
               "$type": "Document",
