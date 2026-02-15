@@ -2935,7 +2935,48 @@ function AdminDashboard({ user, onLogout }) {
 자동이체: ${dynamicFormData.bank || ''}`;
     };
 
-    const handleConfirmCompletion = () => { if (!completionTarget) return; const finalProductInfo = `[${selectedPlatform}] ` + Object.entries(dynamicFormData).map(([k, v]) => `${k}:${v}`).join(', '); const payload = { status: '접수완료', platform: selectedPlatform, product_info: finalProductInfo, agent_policy: calculatedPolicy, installed_date: null }; fetch(`${API_BASE}/api/customers/${completionTarget.id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify(payload) }).then(() => { const logContent = `[시스템 자동접수]\n통신사: ${selectedPlatform}\n상품내역: ${finalProductInfo}\n예상 정책금: ${calculatedPolicy}만원`; return fetch(`${API_BASE}/api/customers/${completionTarget.id}/add_log/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ user_id: user.user_id, content: logContent }) }); }).then(() => { alert("🎉 접수가 완료되었습니다!"); setShowCompletionModal(false); setCompletionTarget(null); loadCurrentTabData(); setActiveTab('reception'); }).catch(err => alert("오류 발생: " + err)); };
+    const handleConfirmCompletion = (generatedText) => {
+        if (!completionTarget) return;
+
+        // 선택된 모든 상품의 정책 합계 계산
+        const totalPolicy = Object.values(dynamicFormData).reduce((acc, cur) => acc + (cur.policy || 0), 0);
+
+        const payload = {
+            status: '접수완료', // 확실하게 접수완료로 전송
+            platform: selectedPlatform,
+            // 생성된 양식 텍스트를 메모에 저장
+            last_memo: generatedText || completionTarget.last_memo,
+            agent_policy: totalPolicy,
+            installed_date: null
+        };
+
+        fetch(`${API_BASE}/api/customers/${completionTarget.id}/`, {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(payload)
+        })
+            .then(async (res) => {
+                if (res.ok) {
+                    // 로그 기록 (양식 텍스트 포함)
+                    const logContent = `[시스템 자동접수]\n통신사: ${selectedPlatform}\n예상 정책금: ${totalPolicy}만원\n\n${generatedText}`;
+
+                    await fetch(`${API_BASE}/api/customers/${completionTarget.id}/add_log/`, {
+                        method: 'POST',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify({ user_id: currentUserId, content: logContent })
+                    });
+
+                    alert("🎉 접수가 완료되었습니다!");
+                    setShowCompletionModal(false);
+                    setCompletionTarget(null);
+                    loadCurrentTabData(); // 데이터 새로고침
+                    setActiveTab('reception'); // 접수관리 탭으로 이동
+                } else {
+                    alert("접수 처리 중 서버 오류가 발생했습니다.");
+                }
+            })
+            .catch(err => console.error(err));
+    };
     const openMemoPopup = (e, customer, field) => { e.stopPropagation(); setMemoPopupTarget(customer); setMemoFieldType(field); setMemoPopupText(customer[field] || ''); };
     const saveMemoPopup = () => { if (!memoPopupTarget || !memoFieldType) return; handleInlineUpdate(memoPopupTarget.id, memoFieldType, memoPopupText); setMemoPopupTarget(null); };
     const handleResponse = (status) => { if (!requestTarget) return; setAllCustomers(prev => prev.map(c => c.id === requestTarget.id ? { ...c, request_status: status } : c)); fetch(`${API_BASE}/api/customers/${requestTarget.id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify({ request_status: status }) }).then(() => { alert("처리됨"); setShowResponseModal(false); setRequestTarget(null); }); };
@@ -3460,12 +3501,12 @@ function AdminDashboard({ user, onLogout }) {
                 )}
 
                 {/* -------------------------------------------------------------------------------------- */}
-                {/* 🛠 AS 및 실패/취소/해지 통합 관리 (4개 탭 구조) */}
+                {/* 🛠 AS 및 실패/취소/해지 통합 관리 (수정완료: 컬럼 정렬 및 기능 추가) */}
                 {/* -------------------------------------------------------------------------------------- */}
                 {activeTab === 'issue_manage' && (
                     <div className="animate-fade-in flex flex-col h-[750px]">
 
-                        {/* 1. 상단 헤더 (타이틀 + 날짜필터) */}
+                        {/* 1. 상단 헤더 */}
                         <div className="flex justify-between items-end mb-2 px-2">
                             <div>
                                 <h2 className="text-xl font-extrabold flex items-center gap-2 text-gray-800">
@@ -3480,19 +3521,19 @@ function AdminDashboard({ user, onLogout }) {
                             </div>
                         </div>
 
-                        {/* 2. 폴더형 탭 버튼 영역 */}
-                        <div className="flex items-end gap-1 border-b-2 border-indigo-600 px-2">
+                        {/* 2. 폴더형 탭 버튼 */}
+                        <div className="flex items-end gap-1 border-b-2 border-indigo-600 px-2 shrink-0">
                             {[
-                                { id: 'as', icon: '🆘', label: 'AS 요청/승인', count: allCustomers.filter(c => c.status === 'AS요청').length },
-                                { id: 'fail', icon: '🚫', label: '실패 목록', count: allCustomers.filter(c => c.status === '실패').length },
-                                { id: 'cancel', icon: '↩️', label: '접수 취소', count: allCustomers.filter(c => c.status === '접수취소').length },
-                                { id: 'termination', icon: '📉', label: '해지 건', count: allCustomers.filter(c => ['해지', '해지진행'].includes(c.status)).length },
+                                { id: 'as', icon: '🆘', label: 'AS 요청/승인' },
+                                { id: 'fail', icon: '🚫', label: '실패 목록' },
+                                { id: 'cancel', icon: '↩️', label: '접수 취소' },
+                                { id: 'termination', icon: '📉', label: '해지 건' },
                             ].map(tab => (
                                 <button
                                     key={tab.id}
-                                    onClick={() => setIssueSubTab(tab.id)}
+                                    onClick={() => { setIssueSubTab(tab.id); setFailReasonFilter(''); }}
                                     className={`relative px-5 py-3 rounded-t-xl text-sm font-bold transition-all border-t border-l border-r
-                                        ${issueSubTab === tab.id
+                        ${issueSubTab === tab.id
                                             ? 'bg-indigo-600 text-white border-indigo-600 translate-y-[2px] shadow-sm z-10'
                                             : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
                                         }`}
@@ -3500,11 +3541,6 @@ function AdminDashboard({ user, onLogout }) {
                                     <span className="flex items-center gap-2">
                                         <span>{tab.icon}</span>
                                         <span>{tab.label}</span>
-                                        {tab.count > 0 && (
-                                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${issueSubTab === tab.id ? 'bg-white text-indigo-600' : 'bg-gray-200 text-gray-600'}`}>
-                                                {tab.count}
-                                            </span>
-                                        )}
                                     </span>
                                 </button>
                             ))}
@@ -3513,11 +3549,11 @@ function AdminDashboard({ user, onLogout }) {
                         {/* 3. 메인 데이터 테이블 영역 */}
                         <div className="flex-1 bg-white border border-t-0 border-gray-200 rounded-b-xl shadow-sm overflow-hidden flex flex-col p-4">
 
-                            {/* 실패 탭일 때만 보이는 사유 필터 */}
+                            {/* 실패 사유 필터 (실패 탭에서만 노출) */}
                             {issueSubTab === 'fail' && (
                                 <div className="flex justify-end mb-3">
                                     <select
-                                        className="bg-gray-50 border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-red-500"
+                                        className="bg-gray-50 border border-gray-300 rounded-lg px-3 py-1.5 text-sm outline-none focus:border-red-500 font-bold"
                                         value={failReasonFilter}
                                         onChange={e => setFailReasonFilter(e.target.value)}
                                     >
@@ -3529,74 +3565,82 @@ function AdminDashboard({ user, onLogout }) {
 
                             <div className="flex-1 overflow-auto custom-scrollbar border rounded-lg">
                                 <table className="sheet-table w-full text-left">
-                                    <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs tracking-wider border-b border-slate-200 sticky top-0 z-10">
+                                    <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[11px] border-b border-slate-200 sticky top-0 z-10">
                                         <tr>
-                                            <th className="p-4 w-16 text-center">상태</th>
-                                            <th className="p-4">접수일/담당자</th>
-                                            <th className="p-4">고객 정보</th>
-                                            <th className="p-4">통신사</th>
-                                            <th className="p-4 w-1/3">
-                                                {issueSubTab === 'fail' ? '실패 사유' :
-                                                    issueSubTab === 'cancel' ? '취소 사유' :
-                                                        issueSubTab === 'termination' ? '해지 사유/메모' :
-                                                            'AS 요청 내용'}
+                                            <th className="p-3 w-24 text-center border-r">상태</th>
+                                            <th className="p-3 w-32 border-r">등록일/담당자</th>
+                                            <th className="p-3 w-28 border-r">고객 정보</th>
+                                            <th className="p-3 w-24 border-r">통신사</th>
+                                            <th className="p-3 min-w-[300px] border-r">
+                                                {issueSubTab === 'as' ? 'AS 요청 상세 내용' : '사유 및 상담 메모'}
                                             </th>
-                                            <th className="p-4 w-48 text-center bg-slate-50">관리 (Action)</th>
+                                            <th className="p-3 w-44 text-center bg-slate-50">관리 액션</th>
                                         </tr>
                                     </thead>
-                                    <tbody className="divide-y divide-gray-100">
+                                    <tbody className="divide-y divide-gray-100 text-xs">
                                         {displayedData.map(c => {
-                                            const isLocked = c.status === 'AS승인'; // 🔒 잠금 조건 정의
-
+                                            const isASLocked = c.status === 'AS승인';
                                             return (
-                                                <tr key={c.id} className={`transition ${isLocked ? 'bg-gray-50/80 opacity-80' : 'hover:bg-indigo-50'}`}>
-                                                    {/* 상태 표시 열 */}
-                                                    <td className="p-3 text-center">
-                                                        <span className={`px-2 py-1 rounded text-xs font-bold border ${getBadgeStyle(c.status)}`}>
+                                                <tr key={c.id} className={`transition ${isASLocked ? 'bg-gray-50/80' : 'hover:bg-indigo-50/30'}`}>
+                                                    {/* 1. 상태 */}
+                                                    <td className="p-3 text-center border-r">
+                                                        <span className={`px-2 py-1 rounded text-[10px] font-black border ${getBadgeStyle(c.status)}`}>
                                                             {c.status}
                                                         </span>
-                                                        {isLocked && <div className="text-[9px] text-gray-400 mt-1 font-bold">🔒 수정잠금</div>}
+                                                        {isASLocked && <div className="text-[9px] text-gray-400 mt-1 font-bold">🔒 수정잠금</div>}
                                                     </td>
-
-                                                    {/* 이름 수정 필드 예시 */}
-                                                    <td className="p-3 font-bold">
-                                                        {isLocked ? (
-                                                            <span className="text-gray-500">{c.name}</span> // 잠겼을 땐 텍스트만 표시
-                                                        ) : (
-                                                            <input
-                                                                type="text"
-                                                                className="bg-transparent border-b border-dashed border-gray-300 focus:border-indigo-500 outline-none w-full"
-                                                                defaultValue={c.name}
-                                                                onBlur={(e) => handleInlineUpdate(c.id, 'name', e.target.value)}
+                                                    {/* 2. 등록일/담당자 */}
+                                                    <td className="p-3 border-r leading-tight">
+                                                        <div className="text-gray-400 font-mono text-[10px]">{c.upload_date?.substring(2, 16)}</div>
+                                                        <div className="font-bold text-indigo-600 mt-1">{getAgentName(c.owner)}</div>
+                                                    </td>
+                                                    {/* 3. 고객 정보 */}
+                                                    <td className="p-3 border-r">
+                                                        <div className="font-bold text-gray-800">{c.name}</div>
+                                                        <div className="text-gray-500 font-mono mt-0.5">{c.phone}</div>
+                                                    </td>
+                                                    {/* 4. 통신사 */}
+                                                    <td className="p-3 border-r font-bold text-gray-600 text-center">{c.platform}</td>
+                                                    {/* 5. 메모 (고급 기능 적용) */}
+                                                    <td className="p-3 border-r align-top">
+                                                        <div className="flex flex-col gap-1">
+                                                            {c.detail_reason && (
+                                                                <div className="text-[11px] text-red-500 font-black mb-1">
+                                                                    [사유] {c.detail_reason}
+                                                                </div>
+                                                            )}
+                                                            <textarea
+                                                                readOnly={isASLocked}
+                                                                className={`w-full bg-transparent border-b border-transparent hover:border-gray-200 focus:border-indigo-500 rounded p-1 text-xs transition-all resize-none outline-none leading-relaxed ${isASLocked ? 'text-gray-400' : 'focus:bg-white focus:shadow-sm'}`}
+                                                                defaultValue={c.last_memo}
+                                                                onBlur={(e) => !isASLocked && handleInlineUpdate(c.id, 'last_memo', e.target.value)}
+                                                                onKeyDown={(e) => !isASLocked && handleMemoKeyDown(e, c.id, c.name)}
+                                                                onInput={autoResizeTextarea}
+                                                                rows={1}
                                                             />
-                                                        )}
+                                                        </div>
                                                     </td>
-
-                                                    {/* 재통화/메모 등 다른 필드들도 동일하게 isLocked 분기 처리 */}
-                                                    <td className="p-3">
-                                                        <textarea
-                                                            readOnly={isLocked} // 🔒 속성으로 제어
-                                                            className={`w-full bg-transparent resize-none outline-none ${isLocked ? 'text-gray-400' : 'focus:border-indigo-500'}`}
-                                                            defaultValue={c.last_memo}
-                                                            onBlur={(e) => !isLocked && handleInlineUpdate(c.id, 'last_memo', e.target.value)}
-                                                        />
-                                                    </td>
-
-                                                    {/* 관리 버튼 */}
-                                                    <td className="p-3">
-                                                        {isLocked ? (
-                                                            // AS승인 건은 '승인 취소' 버튼만 노출 (관리자용 탈출구)
-                                                            <button
-                                                                onClick={() => handleCancelASApproval(c)}
-                                                                className="text-[10px] text-orange-500 hover:underline font-bold"
-                                                            >
-                                                                승인 취소(수정해제)
-                                                            </button>
-                                                        ) : (
-                                                            <button onClick={() => handleDeleteCustomer(c.id)} className="text-red-400 hover:text-red-600">
-                                                                삭제
-                                                            </button>
-                                                        )}
+                                                    {/* 6. 관리 액션 (AS 승인/반려/삭제 버튼) */}
+                                                    <td className="p-3 text-center bg-slate-50/50">
+                                                        <div className="flex flex-wrap justify-center gap-1">
+                                                            {issueSubTab === 'as' ? (
+                                                                <>
+                                                                    {!isASLocked ? (
+                                                                        <>
+                                                                            <button onClick={() => handleApproveAS(c)} className="bg-indigo-600 text-white px-2 py-1 rounded text-[10px] font-bold hover:bg-indigo-700 transition">승인</button>
+                                                                            <button onClick={() => handleRejectAS(c)} className="bg-white border border-gray-300 text-gray-600 px-2 py-1 rounded text-[10px] font-bold hover:bg-gray-100 transition">반려</button>
+                                                                        </>
+                                                                    ) : (
+                                                                        <button onClick={() => handleCancelASApproval(c)} className="bg-orange-50 text-orange-600 border border-orange-200 px-2 py-1 rounded text-[10px] font-bold hover:bg-orange-100 transition">승인취소</button>
+                                                                    )}
+                                                                </>
+                                                            ) : (
+                                                                <button onClick={() => handleRestoreCustomer(c.id)} className="bg-white border border-gray-300 text-gray-600 px-2 py-1 rounded text-[10px] font-bold hover:bg-gray-100 transition">복구</button>
+                                                            )}
+                                                            {!isASLocked && (
+                                                                <button onClick={() => handleDeleteCustomer(c.id)} className="text-red-400 hover:text-red-600 text-[10px] font-bold ml-1 px-1">삭제</button>
+                                                            )}
+                                                        </div>
                                                     </td>
                                                 </tr>
                                             );
@@ -3605,7 +3649,7 @@ function AdminDashboard({ user, onLogout }) {
                                             <tr>
                                                 <td colSpan="6" className="p-20 text-center text-gray-400 bg-white">
                                                     <div className="text-4xl mb-2">📭</div>
-                                                    <p>해당하는 데이터가 없습니다.</p>
+                                                    <p className="font-bold">해당하는 데이터가 없습니다.</p>
                                                 </td>
                                             </tr>
                                         )}
@@ -5223,9 +5267,11 @@ function AdminDashboard({ user, onLogout }) {
                                                                     value={c.status}
                                                                     onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}
                                                                 >
-                                                                    {installList.map(status => (
+                                                                    {receptionList.map(status => (
                                                                         <option key={status} value={status} className="bg-white text-gray-700">
-                                                                            {status === '설치완료' ? '✅ 설치완료' : status === '해지진행' ? '⚠️ 해지진행' : status}
+                                                                            {status === '접수완료' ? '📝 접수완료' :
+                                                                                status === '설치완료' ? '✅ 설치완료' :
+                                                                                    status === '해지진행' ? '⚠️ 해지진행' : status}
                                                                         </option>
                                                                     ))}
                                                                     <optgroup label="데이터 이동">
@@ -5346,212 +5392,132 @@ function AdminDashboard({ user, onLogout }) {
                                 </div>
                             </div>
 
-                            {/* (3) 테이블 영역 */}
-                            <div className="flex-1 overflow-auto border border-gray-200 rounded-xl shadow-sm relative bg-white" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+                            {/* 🟢 [수정완료] 설치완료 테이블: 글자 크기 상향, 버튼 상시 노출, 달력 자동 열기 */}
+                            <div className="flex-1 overflow-auto border border-gray-200 rounded-xl shadow-sm relative bg-white mt-1" style={{ maxHeight: 'calc(100vh - 280px)' }}>
                                 <table className="sheet-table w-full text-left">
-                                    {/* 1. 테이블 헤더 */}
-                                    <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs tracking-wider border-b border-slate-200 sticky top-0 z-10">
+                                    {/* 1. 테이블 헤더: 글자 크기 [12px] 상향 및 간격 재조정 */}
+                                    <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[12px] tracking-wider border-b border-slate-200 sticky top-0 z-10">
                                         <tr>
-                                            <th className="px-4 py-3 bg-indigo-50 text-indigo-700 text-right">매출 (순수익)</th>
-                                            <th className="px-4 py-3">플랫폼</th>
-                                            <th className="px-4 py-3">접수일</th>
-                                            <th className="px-4 py-3">설치일</th>
-                                            <th className="px-4 py-3">고객명</th>
-                                            <th className="px-4 py-3">연락처</th>
-                                            <th className="px-4 py-3 text-right">정책(만)</th>
-                                            <th className="px-4 py-3 text-right">지원금(만)</th>
-                                            <th className="px-4 py-3">상태</th>
-                                            <th className="px-4 py-3">후처리(메모)</th>
+                                            <th className="px-2 py-3 w-[100px] bg-indigo-50 text-indigo-700 text-right border-r border-slate-200">매출(순익)</th>
+                                            <th className="px-2 py-3 w-[85px] border-r border-slate-200">플랫폼</th>
+                                            <th className="px-2 py-3 w-[90px] border-r border-slate-200">접수일</th>
+                                            <th className="px-2 py-3 w-[105px] border-r border-slate-200">설치일</th>
+                                            <th className="px-2 py-3 w-[80px] border-r border-slate-200">고객명</th>
+                                            <th className="px-2 py-3 w-[120px] border-r border-slate-200">연락처</th>
+                                            <th className="px-1 py-3 w-[55px] text-right border-r border-slate-200">정책</th>
+                                            <th className="px-1 py-3 w-[55px] text-right border-r border-slate-200">지원</th>
+                                            <th className="px-2 py-3 w-[115px] border-r border-slate-200 text-center">상태</th>
+                                            <th className="px-4 py-3 min-w-[350px]">후처리 메모 (상세 내용)</th>
                                         </tr>
                                     </thead>
 
-                                    <tbody className="divide-y divide-gray-100">
+                                    {/* 2. 테이블 바디: 텍스트 [12px] 적용 및 버튼/달력 로직 수정 */}
+                                    <tbody className="divide-y divide-gray-100 text-[12px]">
                                         {displayedData.map(c => {
-                                            // 1. 매출 계산
                                             const policy = safeParseInt(c.agent_policy);
                                             const support = safeParseInt(c.support_amt);
                                             let revenue = (policy - support) * 10000;
-
-                                            // 2. 체크리스트 (환수 여부 확인)
                                             const currentChecklist = parseChecklist(c.checklist);
                                             const isRefunded = currentChecklist.includes('환수완료');
 
-                                            // 3. 해지진행 상태 로직 (매출 계산)
                                             if (c.status === '해지진행') {
                                                 if (c.installed_date) {
                                                     const installDate = new Date(c.installed_date);
                                                     const today = new Date();
-                                                    const isSameMonth =
-                                                        installDate.getFullYear() === today.getFullYear() &&
-                                                        installDate.getMonth() === today.getMonth();
-
-                                                    if (isSameMonth) revenue = 0; // 당월 해지
-                                                    else revenue = -Math.abs(revenue); // 익월 이후 해지
-                                                } else {
-                                                    revenue = 0;
-                                                }
+                                                    const isSameMonth = installDate.getFullYear() === today.getFullYear() && installDate.getMonth() === today.getMonth();
+                                                    if (isSameMonth) revenue = 0;
+                                                    else revenue = -Math.abs(revenue);
+                                                } else { revenue = 0; }
                                             }
 
-                                            // 환수 상태 토글 함수
                                             const toggleRefundStatus = () => {
-                                                const newChecklist = isRefunded
-                                                    ? currentChecklist.filter(item => item !== '환수완료')
-                                                    : [...currentChecklist, '환수완료'];
+                                                const newChecklist = isRefunded ? currentChecklist.filter(item => item !== '환수완료') : [...currentChecklist, '환수완료'];
                                                 handleInlineUpdate(c.id, 'checklist', newChecklist.join(','));
                                             };
 
                                             return (
-                                                <tr key={c.id} className="hover:bg-green-50 transition duration-150">
-
+                                                <tr key={c.id} className="hover:bg-green-50/50 transition duration-150">
                                                     {/* 1. 매출 */}
-                                                    <td className={`px-4 py-3 text-right font-extrabold bg-indigo-50/30 border-r border-gray-100
-                    ${revenue > 0 ? 'text-blue-600' : revenue < 0 ? 'text-red-500' : 'text-gray-400'}`}>
-                                                        {formatCurrency(revenue)}원
+                                                    <td className={`px-2 py-2.5 text-right font-black border-r border-slate-100 ${revenue > 0 ? 'text-blue-600' : revenue < 0 ? 'text-red-500' : 'text-gray-400'}`}>
+                                                        {formatCurrency(revenue)}
                                                     </td>
-
                                                     {/* 2. 플랫폼 */}
-                                                    <td className="px-4 py-3">
-                                                        <select
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 rounded px-1 py-1 outline-none cursor-pointer font-bold text-gray-700 text-xs"
-                                                            value={c.platform}
-                                                            onChange={(e) => handleInlineUpdate(c.id, 'platform', e.target.value)}
-                                                        >
-                                                            {platformList.map(p => <option key={p} value={p}>{p}</option>)}
-                                                        </select>
+                                                    <td className="px-2 py-2.5 border-r border-slate-100 font-bold text-gray-600">
+                                                        {c.platform}
                                                     </td>
-
                                                     {/* 3. 접수일 */}
-                                                    <td className="px-4 py-3 text-gray-500 text-xs font-mono">{c.upload_date}</td>
-
-                                                    {/* 4. 설치일 */}
-                                                    <td className="px-4 py-3">
+                                                    <td className="px-2 py-2.5 text-gray-400 font-mono border-r border-slate-100">
+                                                        {c.upload_date?.substring(2, 10)}
+                                                    </td>
+                                                    {/* 4. 설치일 (⭐️ 클릭 시 달력 자동 팝업) */}
+                                                    <td className="px-2 py-2.5 border-r border-slate-100">
                                                         <input
                                                             type="date"
-                                                            className="bg-transparent text-gray-800 font-bold text-xs outline-none border-b border-gray-200 hover:border-gray-400 focus:border-indigo-500 cursor-pointer w-24"
+                                                            className="bg-transparent text-gray-800 font-bold outline-none w-full cursor-pointer hover:text-indigo-600"
                                                             value={c.installed_date || ''}
-                                                            onClick={(e) => e.target.showPicker()}
+                                                            onClick={(e) => e.target.showPicker()} // 👈 달력 호출
                                                             onChange={(e) => handleInlineUpdate(c.id, 'installed_date', e.target.value)}
                                                         />
                                                     </td>
-
                                                     {/* 5. 고객명 */}
-                                                    <td className="px-4 py-3">
-                                                        <input
-                                                            type="text"
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 outline-none w-16 font-bold text-gray-800 transition"
-                                                            defaultValue={c.name}
-                                                            onBlur={(e) => handleInlineUpdate(c.id, 'name', e.target.value)}
-                                                        />
+                                                    <td className="px-2 py-2.5 border-r border-slate-100">
+                                                        <input type="text" className="bg-transparent font-bold text-gray-800 outline-none w-full" defaultValue={c.name} onBlur={(e) => handleInlineUpdate(c.id, 'name', e.target.value)} />
                                                     </td>
-
                                                     {/* 6. 연락처 */}
-                                                    <td className="px-4 py-3">
-                                                        <input
-                                                            type="text"
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 outline-none w-28 text-gray-600 font-mono text-xs transition"
-                                                            defaultValue={c.phone}
-                                                            onBlur={(e) => handleInlineUpdate(c.id, 'phone', e.target.value)}
-                                                        />
-                                                        <div className="mt-1">
-                                                            <button onClick={(e) => handleOpenChat(e, c)} className="text-[10px] bg-white border border-gray-200 px-2 py-0.5 rounded hover:bg-gray-50 transition flex items-center gap-1 w-fit">💬 SMS</button>
+                                                    <td className="px-2 py-2.5 border-r border-slate-100">
+                                                        <div className="flex flex-col">
+                                                            <span className="font-mono text-gray-600">{c.phone}</span>
+                                                            <button onClick={(e) => handleOpenChat(e, c)} className="text-[10px] text-indigo-500 hover:underline w-fit font-bold">💬 SMS</button>
                                                         </div>
                                                     </td>
-
                                                     {/* 7. 정책 */}
-                                                    <td className="px-4 py-3 text-right">
-                                                        <input type="number" className="w-12 bg-transparent text-right outline-none border-b border-gray-200 focus:border-indigo-500 font-bold text-indigo-600 no-spin" defaultValue={c.agent_policy} onBlur={(e) => handleInlineUpdate(c.id, 'agent_policy', e.target.value)} />
+                                                    <td className="px-1 py-2.5 text-right border-r border-slate-100">
+                                                        <input type="number" className="w-full bg-transparent text-right outline-none font-bold text-indigo-600 no-spin" defaultValue={c.agent_policy} onBlur={(e) => handleInlineUpdate(c.id, 'agent_policy', e.target.value)} />
                                                     </td>
-
                                                     {/* 8. 지원금 */}
-                                                    <td className="px-4 py-3 text-right">
-                                                        <input type="number" className="w-12 bg-transparent text-right outline-none border-b border-gray-200 focus:border-indigo-500 font-bold text-red-500 no-spin" defaultValue={c.support_amt} onBlur={(e) => handleInlineUpdate(c.id, 'support_amt', e.target.value)} />
+                                                    <td className="px-1 py-2.5 text-right border-r border-slate-100">
+                                                        <input type="number" className="w-full bg-transparent text-right outline-none font-bold text-red-500 no-spin" defaultValue={c.support_amt} onBlur={(e) => handleInlineUpdate(c.id, 'support_amt', e.target.value)} />
                                                     </td>
-
-                                                    {/* 9. 상태 (환수 관리 + 🟢 가망복사 옵션 추가) */}
-                                                    <td className="px-4 py-3 align-top">
-                                                        <div className="flex flex-col gap-1.5">
-                                                            <select
-                                                                className={`w-28 p-1.5 rounded text-xs font-bold outline-none border border-gray-200 cursor-pointer ${getBadgeStyle(c.status)}`}
-                                                                value={c.status}
-                                                                onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}
-                                                            >
-                                                                {/* 기존 설치/해지 상태들 */}
-                                                                {installList.map(status => (
-                                                                    <option key={status} value={status}>
-                                                                        {status === '설치완료' ? '✅ 설치완료' :
-                                                                            status === '해지진행' ? '⚠️ 해지진행' : status}
-                                                                    </option>
-                                                                ))}
-                                                                {/* 🟢 구분선 및 가망등록 옵션 추가 */}
-                                                                <optgroup label="데이터 이동">
-                                                                    <option value="가망등록">⚡ 가망등록 (복사)</option>
-                                                                </optgroup>
+                                                    {/* 9. 상태 */}
+                                                    <td className="px-2 py-2.5 border-r border-slate-100">
+                                                        <div className="flex flex-col gap-1">
+                                                            <select className={`w-full py-1 rounded text-[11px] font-bold outline-none border cursor-pointer ${getBadgeStyle(c.status)}`} value={c.status} onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}>
+                                                                {installList.map(status => <option key={status} value={status}>{status}</option>)}
+                                                                <option value="가망등록">⚡ 가망복사</option>
                                                             </select>
-
-                                                            {/* 해지진행일 때: 환수 관리 버튼 */}
                                                             {c.status === '해지진행' && (
-                                                                <button
-                                                                    onClick={toggleRefundStatus}
-                                                                    className={`w-28 py-1 rounded text-[10px] font-bold border transition flex items-center justify-center gap-1
-                                ${isRefunded
-                                                                            ? 'bg-gray-100 text-gray-500 border-gray-200'
-                                                                            : 'bg-red-100 text-red-600 border-red-200 animate-pulse'}`}
-                                                                >
-                                                                    {isRefunded ? '✅ 환수완료' : '🚨 미환수 (관리)'}
+                                                                <button onClick={toggleRefundStatus} className={`w-full py-0.5 rounded text-[10px] font-black border ${isRefunded ? 'bg-gray-100 text-gray-400' : 'bg-red-100 text-red-600 border-red-200'}`}>
+                                                                    {isRefunded ? '✅ 환수완료' : '🚨 미환수'}
                                                                 </button>
                                                             )}
                                                         </div>
                                                     </td>
-
-                                                    {/* 10. 후처리 (메모) */}
-                                                    <td className="px-4 py-3 align-top min-w-[200px]">
-                                                        <div className="relative group w-full h-8">
+                                                    {/* 10. 후처리 메모 (⭐️ 버튼 상시 노출 및 레이아웃 최적화) */}
+                                                    {/* 🟢 [수정] 설치완료 탭: 메모칸 기능 강화 (줄바꿈 및 자동높이 적용) */}
+                                                    <td className="px-3 py-2.5 align-top">
+                                                        <div className="flex items-start gap-2 w-full">
                                                             <textarea
-                                                                className="absolute top-0 left-0 w-full h-8 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded p-1 text-sm transition-all resize-none leading-normal overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap focus:bg-white focus:shadow-xl focus:z-50"
-                                                                rows={1}
+                                                                className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-sm text-[12px]"
                                                                 defaultValue={c.last_memo}
-                                                                onFocus={(e) => {
-                                                                    e.target.style.height = 'auto';
-                                                                    e.target.style.height = (e.target.scrollHeight > 32 ? e.target.scrollHeight : 32) + 'px';
-                                                                }}
-                                                                onChange={(e) => {
-                                                                    e.target.style.height = 'auto';
-                                                                    e.target.style.height = e.target.scrollHeight + 'px';
-                                                                }}
                                                                 onBlur={(e) => {
-                                                                    e.target.style.height = '2rem';
+                                                                    e.target.style.height = '2rem'; // 포커스 아웃 시 높이 복구
                                                                     handleInlineUpdate(c.id, 'last_memo', e.target.value);
                                                                 }}
-                                                                onKeyDown={(e) => {
-                                                                    if (e.key === 'Enter' && e.ctrlKey) {
-                                                                        e.preventDefault();
-                                                                        const val = e.target.value;
-                                                                        const start = e.target.selectionStart;
-                                                                        const end = e.target.selectionEnd;
-                                                                        e.target.value = val.substring(0, start) + "\n" + val.substring(end);
-                                                                        e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                                        e.target.style.height = 'auto';
-                                                                        e.target.style.height = e.target.scrollHeight + 'px';
-                                                                        return;
-                                                                    }
-                                                                    handleMemoKeyDown(e, c.id, c.name);
-                                                                }}
-                                                                onDoubleClick={() => handleOpenHistory(c)}
-                                                                placeholder={c.status === '해지진행' ? "후처리 내용 입력..." : "메모..."}
-                                                                title="더블클릭하여 히스토리 보기"
+                                                                onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)} // ⭐️ 줄바꿈/저장 로직 연결
+                                                                onInput={autoResizeTextarea} // ⭐️ 타이핑 시 높이 자동 조절
+                                                                rows={1}
                                                             />
-                                                            <span className="absolute right-1 top-2 text-[8px] text-gray-300 pointer-events-none group-focus-within:hidden">↵</span>
+                                                            <button
+                                                                onClick={() => openActionMemo(c)}
+                                                                className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm"
+                                                            >
+                                                                📝
+                                                            </button>
                                                         </div>
                                                     </td>
-
                                                 </tr>
                                             );
                                         })}
-                                        {displayedData.length === 0 && (
-                                            <tr>
-                                                <td colSpan="10" className="p-10 text-center text-gray-400">설치 완료된 건이 없습니다.</td>
-                                            </tr>
-                                        )}
                                     </tbody>
                                 </table>
                             </div>
@@ -5732,40 +5698,36 @@ function AdminDashboard({ user, onLogout }) {
                                                     </td>
 
                                                     {/* 11. 정산 메모 + 퀵 액션 */}
+                                                    {/* 🟢 [수정] 정산관리 탭: 메모칸 기능 강화 (줄바꿈 및 자동높이 적용) */}
                                                     <td className="px-3 py-2 align-top">
                                                         <div className="flex flex-col gap-1 w-full h-full relative group">
-                                                            <textarea
-                                                                className="flex-1 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded p-1 text-xs outline-none resize-none min-h-[32px] transition-all"
-                                                                defaultValue={c.settlement_memo}
-                                                                rows={1}
-                                                                onBlur={(e) => {
-                                                                    e.target.style.height = '2rem';
-                                                                    handleInlineUpdate(c.id, 'settlement_memo', e.target.value);
-                                                                }}
-                                                                onFocus={(e) => {
-                                                                    e.target.style.height = 'auto';
-                                                                    e.target.style.height = e.target.scrollHeight + 'px';
-                                                                }}
-                                                                placeholder="정산 비고..."
-                                                            />
+                                                            <div className="flex items-start gap-2 w-full">
+                                                                <textarea
+                                                                    className="flex-1 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded p-1 text-[12px] outline-none resize-none min-h-[32px] transition-all focus:bg-white focus:shadow-md"
+                                                                    defaultValue={c.settlement_memo}
+                                                                    onBlur={(e) => {
+                                                                        e.target.style.height = '2rem';
+                                                                        handleInlineUpdate(c.id, 'settlement_memo', e.target.value);
+                                                                    }}
+                                                                    onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)} // ⭐️ 줄바꿈/저장 로직 연결
+                                                                    onInput={autoResizeTextarea} // ⭐️ 높이 조절 연결
+                                                                    rows={1}
+                                                                    placeholder="정산 비고..."
+                                                                />
+                                                                <button
+                                                                    onClick={() => openActionMemo(c)}
+                                                                    className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm"
+                                                                >
+                                                                    📝
+                                                                </button>
+                                                            </div>
 
-                                                            {/* 🟢 퀵 액션 버튼 (항상 보임) */}
-                                                            <button
-                                                                onClick={() => openActionMemo(c)}
-                                                                className="absolute right-0 top-1 text-[10px] bg-white border border-gray-300 text-gray-600 px-1.5 py-0.5 rounded shadow-sm hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300 transition z-10 font-bold"
-                                                                title="퀵 액션 (메모/할일/전달)"
-                                                            >
-                                                                📝
-                                                            </button>
-
-                                                            {/* 회신 요청 버튼 (아래쪽에 배치) */}
+                                                            {/* 회신 요청 버튼 영역 */}
                                                             <div className="flex justify-end mt-1">
                                                                 <button
                                                                     onClick={() => handleSettlementRequest(c)}
                                                                     className={`px-2 py-0.5 rounded text-[9px] font-bold transition shadow-sm border
-                                                        ${c.request_status === 'REQUESTED'
-                                                                            ? 'bg-red-500 text-white border-red-500 animate-pulse'
-                                                                            : 'bg-white text-red-400 border-red-100 hover:bg-red-50 hover:text-red-600'}`}
+                    ${c.request_status === 'REQUESTED' ? 'bg-red-500 text-white border-red-500 animate-pulse' : 'bg-white text-red-400 border-red-100'}`}
                                                                 >
                                                                     {c.request_status === 'REQUESTED' ? '확인 요청중 🔔' : '담당자 확인요청'}
                                                                 </button>

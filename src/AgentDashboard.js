@@ -92,18 +92,14 @@ const autoResizeTextarea = (e) => {
     e.target.style.height = e.target.scrollHeight + 'px';
 };
 
-// ==================================================================================
-// 3. 팝업 컴포넌트 (수정됨: 위치 기억 기능 추가)
-// ==================================================================================
-const PopoutWindow = ({ title, onClose, children, width = 600, height = 800, windowKey = 'default_popup_pos' }) => {
+const PopoutWindow = ({ title, onClose, children, width = 600, height = 800, windowKey = 'default_popup_pos', trigger }) => {
     const [containerEl, setContainerEl] = useState(null);
     const externalWindow = useRef(null);
 
-    useEffect(() => {
-        // 1. 저장된 위치 불러오기 (없으면 화면 중앙쯤 위치)
+    const initWindow = useCallback(() => {
         const savedPos = localStorage.getItem(windowKey);
-        let left = 200;
-        let top = 100;
+        let left = (window.screen.width - width) / 2;
+        let top = (window.screen.height - height) / 2;
 
         if (savedPos) {
             try {
@@ -111,100 +107,65 @@ const PopoutWindow = ({ title, onClose, children, width = 600, height = 800, win
                 left = parsed.x;
                 top = parsed.y;
             } catch (e) { }
-        } else {
-            // 처음 열 때 화면 중앙 정렬 계산
-            left = (window.screen.width - width) / 2;
-            top = (window.screen.height - height) / 2;
         }
 
-        // 2. 윈도우 열기 (저장된 left, top 적용)
+        // 창이 없거나 닫혔을 때만 새로 엽니다.
         if (!externalWindow.current || externalWindow.current.closed) {
-            externalWindow.current = window.open(
-                "",
-                "",
+            externalWindow.current = window.open("", windowKey,
                 `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`
             );
         }
 
         const win = externalWindow.current;
+        if (!win) return;
 
-        if (!win) {
-            alert("⚠️ 팝업이 차단되었습니다! 브라우저 주소창 우측의 팝업 차단을 해제해주세요.");
-            if (onClose) onClose();
-            return;
-        }
-
-        // 창 크기 강제 조정
+        // ⭐️ [핵심] 창이 이미 있어도 다시 포커스하고 저장된 위치로 이동
+        win.focus();
         try {
+            win.moveTo(left, top);
             win.resizeTo(width, height);
-        } catch (e) {
-            console.error("Resizing blocked by browser", e);
-        }
+        } catch (e) { }
 
-        // 3. HTML 구조 작성 (기존과 동일)
-        try {
+        if (!win.document.getElementById('popout-root')) {
             win.document.open();
             win.document.write(`
                 <!DOCTYPE html>
-                <html lang="ko">
+                <html>
                 <head>
-                    <meta charset="utf-8" />
-                    <title>${title || "관리자 팝업"}</title>
-                    <style>
-                        body { margin: 0; padding: 0; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-                        #popout-root { height: 100vh; overflow: hidden; }
-                        ::-webkit-scrollbar { display: none; }
-                        * { -ms-overflow-style: none; scrollbar-width: none; }
-                    </style>
+                    <meta charset="utf-8" /><title>${title}</title>
+                    <style>body{margin:0;padding:0;background:#fff;} #popout-root{height:100vh;overflow:hidden;} ::-webkit-scrollbar{display:none;}</style>
                 </head>
-                <body>
-                    <div id="popout-root"></div>
-                </body>
+                <body><div id="popout-root"></div></body>
                 </html>
             `);
             win.document.close();
-        } catch (e) {
-            console.error("Popup Write Error:", e);
+            document.querySelectorAll('link[rel="stylesheet"]').forEach(n => win.document.head.appendChild(n.cloneNode(true)));
+            document.querySelectorAll('style').forEach(n => win.document.head.appendChild(n.cloneNode(true)));
+            const s = win.document.createElement('script');
+            s.src = "https://cdn.tailwindcss.com";
+            win.document.head.appendChild(s);
         }
 
-        // 스타일 복사 및 Tailwind 주입 (기존과 동일)
-        document.querySelectorAll('link[rel="stylesheet"]').forEach(node => {
-            win.document.head.appendChild(node.cloneNode(true));
-        });
-        document.querySelectorAll('style').forEach(node => {
-            win.document.head.appendChild(node.cloneNode(true));
-        });
-        const script = win.document.createElement('script');
-        script.src = "https://cdn.tailwindcss.com";
-        win.document.head.appendChild(script);
+        const container = win.document.getElementById('popout-root');
+        if (container) setContainerEl(container);
+    }, [title, width, height, windowKey]);
 
-        // 컨테이너 설정
-        setTimeout(() => {
-            const container = win.document.getElementById('popout-root');
-            if (container) setContainerEl(container);
-            else if (onClose) onClose();
-        }, 100);
+    useEffect(() => {
+        initWindow(); // ⭐️ trigger가 바뀔 때마다 이 함수가 실행됩니다.
+    }, [initWindow, trigger]); // ⭐️ trigger를 감시합니다.
 
-        // 4. [핵심] 윈도우 위치/상태 감시 및 저장
+    useEffect(() => {
+        const win = externalWindow.current;
         const timer = setInterval(() => {
-            if (win.closed) {
+            if (!win || win.closed) {
                 clearInterval(timer);
-                if (onClose) onClose();
+                onClose();
             } else {
-                // ⭐️ 현재 위치를 1초마다 저장 (창을 이동하면 자동 저장됨)
-                // screenX, screenY는 모니터 기준 절대 좌표입니다.
-                const currentPos = { x: win.screenX, y: win.screenY };
-                localStorage.setItem(windowKey, JSON.stringify(currentPos));
+                localStorage.setItem(windowKey, JSON.stringify({ x: win.screenX, y: win.screenY }));
             }
-        }, 1000); // 1초마다 위치 확인
-
-        return () => {
-            clearInterval(timer);
-            if (win && !win.closed) {
-                win.close();
-            }
-        };
-    }, []); // 의존성 배열 비움 (한 번만 실행)
+        }, 1000);
+        return () => clearInterval(timer);
+    }, [windowKey, onClose]);
 
     return containerEl ? ReactDOM.createPortal(children, containerEl) : null;
 };
@@ -270,6 +231,11 @@ function AgentDashboard({ user, onLogout }) {
         end: new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).toISOString().split('T')[0]
     });
 
+
+    // 각 팝업마다 리프레시용 숫자를 만듭니다.
+    const [completionTrigger, setCompletionTrigger] = useState(0);
+    const [policyViewerTrigger, setPolicyViewerTrigger] = useState(0);
+
     const currentUserId = user ? String(user.user_id || user.id) : null;
 
     // ==========================================================================
@@ -331,6 +297,7 @@ function AgentDashboard({ user, onLogout }) {
             fetchAllData();
             fetchAgents();
             fetchNoticesAndPolicies();
+            fetchAssignedTasks();
 
             const headers = getAuthHeaders();
             fetch(`${API_BASE}/api/ad_channels/`, { headers }).then(res => res.json()).then(setAdChannels).catch(() => { });
@@ -429,6 +396,41 @@ function AgentDashboard({ user, onLogout }) {
         setTabsConfig(prev => prev.map(t =>
             t.id === id ? { ...t, visible: !t.visible } : t
         ));
+    };
+
+    // 1. 받은 지시사항 데이터 불러오기 함수
+    const fetchAssignedTasks = useCallback(async () => {
+        try {
+            const res = await fetch(`${API_BASE}/api/todos/assigned/`, {
+                headers: getAuthHeaders()
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setAssignedTasks(data);
+            }
+        } catch (e) {
+            console.error("지시사항 로드 실패:", e);
+        }
+    }, [getAuthHeaders]);
+
+    // 2. 지시사항 완료 처리 함수 (완료 버튼 클릭 시 실행)
+    const handleToggleAssignedTask = async (taskId) => {
+        try {
+            const res = await fetch(`${API_BASE}/api/todos/${taskId}/`, {
+                method: 'PATCH',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ is_completed: true }) // 완료 상태로 변경
+            });
+
+            if (res.ok) {
+                alert("✅ 업무가 완료 처리되었습니다.");
+                fetchAssignedTasks(); // 목록 새로고침
+            } else {
+                alert("처리 중 오류가 발생했습니다.");
+            }
+        } catch (e) {
+            alert("서버와 통신할 수 없습니다.");
+        }
     };
 
     // 🟢 [수정] 건별 등록 제출 핸들러 (직접 입력값 자동 저장 기능 추가)
@@ -791,6 +793,9 @@ function AgentDashboard({ user, onLogout }) {
 
     const [showCustomModal, setShowCustomModal] = useState(false);
     const [adSpend, setAdSpend] = useState(0);
+
+    // 관리자로부터 받은 지시사항 목록을 저장할 상태
+    const [assignedTasks, setAssignedTasks] = useState([]);
 
     const [visibleColumns, setVisibleColumns] = useState(() => {
         try { return JSON.parse(localStorage.getItem('agent_stat_columns')) || INITIAL_VISIBLE_COLUMNS; } catch { return INITIAL_VISIBLE_COLUMNS; }
@@ -2452,6 +2457,7 @@ function AgentDashboard({ user, onLogout }) {
             setDynamicFormData({});
             setCalculatedPolicy(0);
             setShowCompletionModal(true);
+            setCompletionTrigger(prev => prev + 1);
             return;
         }
 
@@ -2576,7 +2582,49 @@ function AgentDashboard({ user, onLogout }) {
 자동이체: ${dynamicFormData.bank || ''}`;
     };
 
-    const handleConfirmCompletion = () => { if (!completionTarget) return; const finalProductInfo = `[${selectedPlatform}] ` + Object.entries(dynamicFormData).map(([k, v]) => `${k}:${v}`).join(', '); const payload = { status: '접수완료', platform: selectedPlatform, product_info: finalProductInfo, agent_policy: calculatedPolicy, installed_date: null }; fetch(`${API_BASE}/api/customers/${completionTarget.id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify(payload) }).then(() => { const logContent = `[시스템 자동접수]\n통신사: ${selectedPlatform}\n상품내역: ${finalProductInfo}\n예상 정책금: ${calculatedPolicy}만원`; return fetch(`${API_BASE}/api/customers/${completionTarget.id}/add_log/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ user_id: user.user_id, content: logContent }) }); }).then(() => { alert("🎉 접수가 완료되었습니다!"); setShowCompletionModal(false); setCompletionTarget(null); loadCurrentTabData(); setActiveTab('reception'); }).catch(err => alert("오류 발생: " + err)); };
+    const handleConfirmCompletion = (generatedText) => {
+        if (!completionTarget) return;
+
+        // 선택된 모든 상품의 정책 합계 계산
+        const totalPolicy = Object.values(dynamicFormData).reduce((acc, cur) => acc + (cur.policy || 0), 0);
+
+        const payload = {
+            status: '접수완료', // 확실하게 접수완료로 전송
+            platform: selectedPlatform,
+            // 생성된 양식 텍스트를 메모에 저장
+            last_memo: generatedText || completionTarget.last_memo,
+            agent_policy: totalPolicy,
+            installed_date: null
+        };
+
+        fetch(`${API_BASE}/api/customers/${completionTarget.id}/`, {
+            method: 'PATCH',
+            headers: getAuthHeaders(),
+            body: JSON.stringify(payload)
+        })
+            .then(async (res) => {
+                if (res.ok) {
+                    // 로그 기록 (양식 텍스트 포함)
+                    const logContent = `[시스템 자동접수]\n통신사: ${selectedPlatform}\n예상 정책금: ${totalPolicy}만원\n\n${generatedText}`;
+
+                    await fetch(`${API_BASE}/api/customers/${completionTarget.id}/add_log/`, {
+                        method: 'POST',
+                        headers: getAuthHeaders(),
+                        body: JSON.stringify({ user_id: currentUserId, content: logContent })
+                    });
+
+                    alert("🎉 접수가 완료되었습니다!");
+                    setShowCompletionModal(false);
+                    setCompletionTarget(null);
+                    loadCurrentTabData(); // 데이터 새로고침
+                    setActiveTab('reception'); // 접수관리 탭으로 이동
+                } else {
+                    alert("접수 처리 중 서버 오류가 발생했습니다.");
+                }
+            })
+            .catch(err => console.error(err));
+    };
+
     const openMemoPopup = (e, customer, field) => { e.stopPropagation(); setMemoPopupTarget(customer); setMemoFieldType(field); setMemoPopupText(customer[field] || ''); };
     const saveMemoPopup = () => { if (!memoPopupTarget || !memoFieldType) return; handleInlineUpdate(memoPopupTarget.id, memoFieldType, memoPopupText); setMemoPopupTarget(null); };
     const handleResponse = (status) => { if (!requestTarget) return; setAllCustomers(prev => prev.map(c => c.id === requestTarget.id ? { ...c, request_status: status } : c)); fetch(`${API_BASE}/api/customers/${requestTarget.id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify({ request_status: status }) }).then(() => { alert("처리됨"); setShowResponseModal(false); setRequestTarget(null); }); };
@@ -2764,6 +2812,7 @@ function AgentDashboard({ user, onLogout }) {
                             onClick={() => {
                                 setViewerPlatform('KT');
                                 setShowPolicyViewer(true);
+                                setPolicyViewerTrigger(prev => prev + 1);
                                 fetchNoticesAndPolicies();
                             }}
                             className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
@@ -4161,9 +4210,11 @@ function AgentDashboard({ user, onLogout }) {
                                                                     value={c.status}
                                                                     onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}
                                                                 >
-                                                                    {installList.map(status => (
+                                                                    {receptionList.map(status => (
                                                                         <option key={status} value={status} className="bg-white text-gray-700">
-                                                                            {status === '설치완료' ? '✅ 설치완료' : status === '해지진행' ? '⚠️ 해지진행' : status}
+                                                                            {status === '접수완료' ? '📝 접수완료' :
+                                                                                status === '설치완료' ? '✅ 설치완료' :
+                                                                                    status === '해지진행' ? '⚠️ 해지진행' : status}
                                                                         </option>
                                                                     ))}
                                                                     <optgroup label="데이터 이동">
@@ -4284,212 +4335,132 @@ function AgentDashboard({ user, onLogout }) {
                                 </div>
                             </div>
 
-                            {/* (3) 테이블 영역 */}
-                            <div className="flex-1 overflow-auto border border-gray-200 rounded-xl shadow-sm relative bg-white" style={{ maxHeight: 'calc(100vh - 280px)' }}>
+                            {/* 🟢 [수정완료] 설치완료 테이블: 글자 크기 상향, 버튼 상시 노출, 달력 자동 열기 */}
+                            <div className="flex-1 overflow-auto border border-gray-200 rounded-xl shadow-sm relative bg-white mt-1" style={{ maxHeight: 'calc(100vh - 280px)' }}>
                                 <table className="sheet-table w-full text-left">
-                                    {/* 1. 테이블 헤더 */}
-                                    <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-xs tracking-wider border-b border-slate-200 sticky top-0 z-10">
+                                    {/* 1. 테이블 헤더: 글자 크기 [12px] 상향 및 간격 재조정 */}
+                                    <thead className="bg-slate-100 text-slate-600 font-bold uppercase text-[12px] tracking-wider border-b border-slate-200 sticky top-0 z-10">
                                         <tr>
-                                            <th className="px-4 py-3 bg-indigo-50 text-indigo-700 text-right">매출 (순수익)</th>
-                                            <th className="px-4 py-3">플랫폼</th>
-                                            <th className="px-4 py-3">접수일</th>
-                                            <th className="px-4 py-3">설치일</th>
-                                            <th className="px-4 py-3">고객명</th>
-                                            <th className="px-4 py-3">연락처</th>
-                                            <th className="px-4 py-3 text-right">정책(만)</th>
-                                            <th className="px-4 py-3 text-right">지원금(만)</th>
-                                            <th className="px-4 py-3">상태</th>
-                                            <th className="px-4 py-3">후처리(메모)</th>
+                                            <th className="px-2 py-3 w-[100px] bg-indigo-50 text-indigo-700 text-right border-r border-slate-200">매출(순익)</th>
+                                            <th className="px-2 py-3 w-[85px] border-r border-slate-200">플랫폼</th>
+                                            <th className="px-2 py-3 w-[90px] border-r border-slate-200">접수일</th>
+                                            <th className="px-2 py-3 w-[105px] border-r border-slate-200">설치일</th>
+                                            <th className="px-2 py-3 w-[80px] border-r border-slate-200">고객명</th>
+                                            <th className="px-2 py-3 w-[120px] border-r border-slate-200">연락처</th>
+                                            <th className="px-1 py-3 w-[55px] text-right border-r border-slate-200">정책</th>
+                                            <th className="px-1 py-3 w-[55px] text-right border-r border-slate-200">지원</th>
+                                            <th className="px-2 py-3 w-[115px] border-r border-slate-200 text-center">상태</th>
+                                            <th className="px-4 py-3 min-w-[350px]">후처리 메모 (상세 내용)</th>
                                         </tr>
                                     </thead>
 
-                                    <tbody className="divide-y divide-gray-100">
+                                    {/* 2. 테이블 바디: 텍스트 [12px] 적용 및 버튼/달력 로직 수정 */}
+                                    <tbody className="divide-y divide-gray-100 text-[12px]">
                                         {displayedData.map(c => {
-                                            // 1. 매출 계산
                                             const policy = safeParseInt(c.agent_policy);
                                             const support = safeParseInt(c.support_amt);
                                             let revenue = (policy - support) * 10000;
-
-                                            // 2. 체크리스트 (환수 여부 확인)
                                             const currentChecklist = parseChecklist(c.checklist);
                                             const isRefunded = currentChecklist.includes('환수완료');
 
-                                            // 3. 해지진행 상태 로직 (매출 계산)
                                             if (c.status === '해지진행') {
                                                 if (c.installed_date) {
                                                     const installDate = new Date(c.installed_date);
                                                     const today = new Date();
-                                                    const isSameMonth =
-                                                        installDate.getFullYear() === today.getFullYear() &&
-                                                        installDate.getMonth() === today.getMonth();
-
-                                                    if (isSameMonth) revenue = 0; // 당월 해지
-                                                    else revenue = -Math.abs(revenue); // 익월 이후 해지
-                                                } else {
-                                                    revenue = 0;
-                                                }
+                                                    const isSameMonth = installDate.getFullYear() === today.getFullYear() && installDate.getMonth() === today.getMonth();
+                                                    if (isSameMonth) revenue = 0;
+                                                    else revenue = -Math.abs(revenue);
+                                                } else { revenue = 0; }
                                             }
 
-                                            // 환수 상태 토글 함수
                                             const toggleRefundStatus = () => {
-                                                const newChecklist = isRefunded
-                                                    ? currentChecklist.filter(item => item !== '환수완료')
-                                                    : [...currentChecklist, '환수완료'];
+                                                const newChecklist = isRefunded ? currentChecklist.filter(item => item !== '환수완료') : [...currentChecklist, '환수완료'];
                                                 handleInlineUpdate(c.id, 'checklist', newChecklist.join(','));
                                             };
 
                                             return (
-                                                <tr key={c.id} className="hover:bg-green-50 transition duration-150">
-
+                                                <tr key={c.id} className="hover:bg-green-50/50 transition duration-150">
                                                     {/* 1. 매출 */}
-                                                    <td className={`px-4 py-3 text-right font-extrabold bg-indigo-50/30 border-r border-gray-100
-                    ${revenue > 0 ? 'text-blue-600' : revenue < 0 ? 'text-red-500' : 'text-gray-400'}`}>
-                                                        {formatCurrency(revenue)}원
+                                                    <td className={`px-2 py-2.5 text-right font-black border-r border-slate-100 ${revenue > 0 ? 'text-blue-600' : revenue < 0 ? 'text-red-500' : 'text-gray-400'}`}>
+                                                        {formatCurrency(revenue)}
                                                     </td>
-
                                                     {/* 2. 플랫폼 */}
-                                                    <td className="px-4 py-3">
-                                                        <select
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 rounded px-1 py-1 outline-none cursor-pointer font-bold text-gray-700 text-xs"
-                                                            value={c.platform}
-                                                            onChange={(e) => handleInlineUpdate(c.id, 'platform', e.target.value)}
-                                                        >
-                                                            {platformList.map(p => <option key={p} value={p}>{p}</option>)}
-                                                        </select>
+                                                    <td className="px-2 py-2.5 border-r border-slate-100 font-bold text-gray-600">
+                                                        {c.platform}
                                                     </td>
-
                                                     {/* 3. 접수일 */}
-                                                    <td className="px-4 py-3 text-gray-500 text-xs font-mono">{c.upload_date}</td>
-
-                                                    {/* 4. 설치일 */}
-                                                    <td className="px-4 py-3">
+                                                    <td className="px-2 py-2.5 text-gray-400 font-mono border-r border-slate-100">
+                                                        {c.upload_date?.substring(2, 10)}
+                                                    </td>
+                                                    {/* 4. 설치일 (⭐️ 클릭 시 달력 자동 팝업) */}
+                                                    <td className="px-2 py-2.5 border-r border-slate-100">
                                                         <input
                                                             type="date"
-                                                            className="bg-transparent text-gray-800 font-bold text-xs outline-none border-b border-gray-200 hover:border-gray-400 focus:border-indigo-500 cursor-pointer w-24"
+                                                            className="bg-transparent text-gray-800 font-bold outline-none w-full cursor-pointer hover:text-indigo-600"
                                                             value={c.installed_date || ''}
-                                                            onClick={(e) => e.target.showPicker()}
+                                                            onClick={(e) => e.target.showPicker()} // 👈 달력 호출
                                                             onChange={(e) => handleInlineUpdate(c.id, 'installed_date', e.target.value)}
                                                         />
                                                     </td>
-
                                                     {/* 5. 고객명 */}
-                                                    <td className="px-4 py-3">
-                                                        <input
-                                                            type="text"
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 outline-none w-16 font-bold text-gray-800 transition"
-                                                            defaultValue={c.name}
-                                                            onBlur={(e) => handleInlineUpdate(c.id, 'name', e.target.value)}
-                                                        />
+                                                    <td className="px-2 py-2.5 border-r border-slate-100">
+                                                        <input type="text" className="bg-transparent font-bold text-gray-800 outline-none w-full" defaultValue={c.name} onBlur={(e) => handleInlineUpdate(c.id, 'name', e.target.value)} />
                                                     </td>
-
                                                     {/* 6. 연락처 */}
-                                                    <td className="px-4 py-3">
-                                                        <input
-                                                            type="text"
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 outline-none w-28 text-gray-600 font-mono text-xs transition"
-                                                            defaultValue={c.phone}
-                                                            onBlur={(e) => handleInlineUpdate(c.id, 'phone', e.target.value)}
-                                                        />
-                                                        <div className="mt-1">
-                                                            <button onClick={(e) => handleOpenChat(e, c)} className="text-[10px] bg-white border border-gray-200 px-2 py-0.5 rounded hover:bg-gray-50 transition flex items-center gap-1 w-fit">💬 SMS</button>
+                                                    <td className="px-2 py-2.5 border-r border-slate-100">
+                                                        <div className="flex flex-col">
+                                                            <span className="font-mono text-gray-600">{c.phone}</span>
+                                                            <button onClick={(e) => handleOpenChat(e, c)} className="text-[10px] text-indigo-500 hover:underline w-fit font-bold">💬 SMS</button>
                                                         </div>
                                                     </td>
-
                                                     {/* 7. 정책 */}
-                                                    <td className="px-4 py-3 text-right">
-                                                        <input type="number" className="w-12 bg-transparent text-right outline-none border-b border-gray-200 focus:border-indigo-500 font-bold text-indigo-600 no-spin" defaultValue={c.agent_policy} onBlur={(e) => handleInlineUpdate(c.id, 'agent_policy', e.target.value)} />
+                                                    <td className="px-1 py-2.5 text-right border-r border-slate-100">
+                                                        <input type="number" className="w-full bg-transparent text-right outline-none font-bold text-indigo-600 no-spin" defaultValue={c.agent_policy} onBlur={(e) => handleInlineUpdate(c.id, 'agent_policy', e.target.value)} />
                                                     </td>
-
                                                     {/* 8. 지원금 */}
-                                                    <td className="px-4 py-3 text-right">
-                                                        <input type="number" className="w-12 bg-transparent text-right outline-none border-b border-gray-200 focus:border-indigo-500 font-bold text-red-500 no-spin" defaultValue={c.support_amt} onBlur={(e) => handleInlineUpdate(c.id, 'support_amt', e.target.value)} />
+                                                    <td className="px-1 py-2.5 text-right border-r border-slate-100">
+                                                        <input type="number" className="w-full bg-transparent text-right outline-none font-bold text-red-500 no-spin" defaultValue={c.support_amt} onBlur={(e) => handleInlineUpdate(c.id, 'support_amt', e.target.value)} />
                                                     </td>
-
-                                                    {/* 9. 상태 (환수 관리 + 🟢 가망복사 옵션 추가) */}
-                                                    <td className="px-4 py-3 align-top">
-                                                        <div className="flex flex-col gap-1.5">
-                                                            <select
-                                                                className={`w-28 p-1.5 rounded text-xs font-bold outline-none border border-gray-200 cursor-pointer ${getBadgeStyle(c.status)}`}
-                                                                value={c.status}
-                                                                onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}
-                                                            >
-                                                                {/* 기존 설치/해지 상태들 */}
-                                                                {installList.map(status => (
-                                                                    <option key={status} value={status}>
-                                                                        {status === '설치완료' ? '✅ 설치완료' :
-                                                                            status === '해지진행' ? '⚠️ 해지진행' : status}
-                                                                    </option>
-                                                                ))}
-                                                                {/* 🟢 구분선 및 가망등록 옵션 추가 */}
-                                                                <optgroup label="데이터 이동">
-                                                                    <option value="가망등록">⚡ 가망등록 (복사)</option>
-                                                                </optgroup>
+                                                    {/* 9. 상태 */}
+                                                    <td className="px-2 py-2.5 border-r border-slate-100">
+                                                        <div className="flex flex-col gap-1">
+                                                            <select className={`w-full py-1 rounded text-[11px] font-bold outline-none border cursor-pointer ${getBadgeStyle(c.status)}`} value={c.status} onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}>
+                                                                {installList.map(status => <option key={status} value={status}>{status}</option>)}
+                                                                <option value="가망등록">⚡ 가망복사</option>
                                                             </select>
-
-                                                            {/* 해지진행일 때: 환수 관리 버튼 */}
                                                             {c.status === '해지진행' && (
-                                                                <button
-                                                                    onClick={toggleRefundStatus}
-                                                                    className={`w-28 py-1 rounded text-[10px] font-bold border transition flex items-center justify-center gap-1
-                                ${isRefunded
-                                                                            ? 'bg-gray-100 text-gray-500 border-gray-200'
-                                                                            : 'bg-red-100 text-red-600 border-red-200 animate-pulse'}`}
-                                                                >
-                                                                    {isRefunded ? '✅ 환수완료' : '🚨 미환수 (관리)'}
+                                                                <button onClick={toggleRefundStatus} className={`w-full py-0.5 rounded text-[10px] font-black border ${isRefunded ? 'bg-gray-100 text-gray-400' : 'bg-red-100 text-red-600 border-red-200'}`}>
+                                                                    {isRefunded ? '✅ 환수완료' : '🚨 미환수'}
                                                                 </button>
                                                             )}
                                                         </div>
                                                     </td>
-
-                                                    {/* 10. 후처리 (메모) */}
-                                                    <td className="px-4 py-3 align-top min-w-[200px]">
-                                                        <div className="relative group w-full h-8">
+                                                    {/* 10. 후처리 메모 (⭐️ 버튼 상시 노출 및 레이아웃 최적화) */}
+                                                    {/* 🟢 [수정] 설치완료 탭: 메모칸 기능 강화 (줄바꿈 및 자동높이 적용) */}
+                                                    <td className="px-3 py-2.5 align-top">
+                                                        <div className="flex items-start gap-2 w-full">
                                                             <textarea
-                                                                className="absolute top-0 left-0 w-full h-8 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded p-1 text-sm transition-all resize-none leading-normal overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap focus:bg-white focus:shadow-xl focus:z-50"
-                                                                rows={1}
+                                                                className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-sm text-[12px]"
                                                                 defaultValue={c.last_memo}
-                                                                onFocus={(e) => {
-                                                                    e.target.style.height = 'auto';
-                                                                    e.target.style.height = (e.target.scrollHeight > 32 ? e.target.scrollHeight : 32) + 'px';
-                                                                }}
-                                                                onChange={(e) => {
-                                                                    e.target.style.height = 'auto';
-                                                                    e.target.style.height = e.target.scrollHeight + 'px';
-                                                                }}
                                                                 onBlur={(e) => {
-                                                                    e.target.style.height = '2rem';
+                                                                    e.target.style.height = '2rem'; // 포커스 아웃 시 높이 복구
                                                                     handleInlineUpdate(c.id, 'last_memo', e.target.value);
                                                                 }}
-                                                                onKeyDown={(e) => {
-                                                                    if (e.key === 'Enter' && e.ctrlKey) {
-                                                                        e.preventDefault();
-                                                                        const val = e.target.value;
-                                                                        const start = e.target.selectionStart;
-                                                                        const end = e.target.selectionEnd;
-                                                                        e.target.value = val.substring(0, start) + "\n" + val.substring(end);
-                                                                        e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                                        e.target.style.height = 'auto';
-                                                                        e.target.style.height = e.target.scrollHeight + 'px';
-                                                                        return;
-                                                                    }
-                                                                    handleMemoKeyDown(e, c.id, c.name);
-                                                                }}
-                                                                onDoubleClick={() => handleOpenHistory(c)}
-                                                                placeholder={c.status === '해지진행' ? "후처리 내용 입력..." : "메모..."}
-                                                                title="더블클릭하여 히스토리 보기"
+                                                                onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)} // ⭐️ 줄바꿈/저장 로직 연결
+                                                                onInput={autoResizeTextarea} // ⭐️ 타이핑 시 높이 자동 조절
+                                                                rows={1}
                                                             />
-                                                            <span className="absolute right-1 top-2 text-[8px] text-gray-300 pointer-events-none group-focus-within:hidden">↵</span>
+                                                            <button
+                                                                onClick={() => openActionMemo(c)}
+                                                                className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm"
+                                                            >
+                                                                📝
+                                                            </button>
                                                         </div>
                                                     </td>
-
                                                 </tr>
                                             );
                                         })}
-                                        {displayedData.length === 0 && (
-                                            <tr>
-                                                <td colSpan="10" className="p-10 text-center text-gray-400">설치 완료된 건이 없습니다.</td>
-                                            </tr>
-                                        )}
                                     </tbody>
                                 </table>
                             </div>
@@ -4499,7 +4470,7 @@ function AgentDashboard({ user, onLogout }) {
 
             {/* 🟢 [개편완료] 접수 완료 모달: 좌측 양식 / 우측 선택 / 상단 탭 */}
             {showCompletionModal && completionTarget && (
-                <PopoutWindow title="📝 접수 양식 작성 및 확정" onClose={() => setShowCompletionModal(false)} width={1100} height={850}>
+                    <PopoutWindow title="📝 접수 양식 작성 및 확정" onClose={() => setShowCompletionModal(false)} width={1100} height={850} trigger={completionTrigger} >
                     <div className="flex flex-col h-full bg-slate-100 font-sans overflow-hidden">
 
                         {/* (1) 상단 통신사 탭 (폴더 스타일) */}
@@ -4988,7 +4959,193 @@ function AgentDashboard({ user, onLogout }) {
                         </div>
                     </div>
                 </PopoutWindow>
-            )}
+                )}
+
+
+                {/* ⭐️ [상담원 전용] 메모장 + 받은 업무 지시 확인 기능 */}
+                {activeTab === 'notepad' && (
+                    <div className="flex h-full gap-6 animate-fade-in p-2">
+
+                        {/* (Left) 카테고리 사이드바 */}
+                        <div className="w-64 bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col overflow-hidden shrink-0">
+                            <div className="p-4 border-b border-gray-100 bg-gray-50">
+                                <h3 className="font-bold text-gray-700 text-sm">📂 업무 도구함</h3>
+                            </div>
+
+                            <div className="flex-1 overflow-y-auto custom-scrollbar p-2 space-y-1">
+                                {/* 1. 개인 업무 */}
+                                <div
+                                    onClick={() => setActiveTodoTab('ALL')}
+                                    className={`p-3 rounded-lg cursor-pointer flex justify-between items-center transition ${activeTodoTab === 'ALL' ? 'bg-indigo-100 text-indigo-700 font-bold' : 'hover:bg-gray-50 text-gray-600'}`}
+                                >
+                                    <span>📝 내 개인 할 일</span>
+                                    <span className="text-xs bg-white px-2 py-0.5 rounded border border-gray-200">{todos.length}</span>
+                                </div>
+
+                                {/* 2. 사용자 폴더들 */}
+                                {todoTabs.map(tab => (
+                                    <div key={tab.id} onClick={() => setActiveTodoTab(tab.id)}
+                                        onDragOver={handleDragOver} onDrop={(e) => handleDropOnTab(e, tab.id)}
+                                        className={`p-3 rounded-lg cursor-pointer flex justify-between items-center transition ml-2 border-l-2 ${activeTodoTab === tab.id ? 'bg-indigo-50 border-indigo-400 text-indigo-700' : 'border-transparent hover:bg-gray-50'}`}>
+                                        <span className="text-sm">└ 📁 {tab.name}</span>
+                                        <button onClick={(e) => handleDeleteTodoTab(tab.id, e)} className="text-gray-300 hover:text-red-500">×</button>
+                                    </div>
+                                ))}
+                                <button onClick={handleAddTodoTab} className="w-full text-xs text-gray-400 py-2 hover:text-indigo-600 text-left px-4">+ 폴더 추가</button>
+
+                                <div className="h-px bg-gray-200 my-2"></div>
+
+                                {/* 3. [변경] 관리자 업무 지시 (상담원 시점) */}
+                                <div
+                                    onClick={() => setActiveTodoTab('ADMIN_ASSIGN')}
+                                    className={`p-3 rounded-lg cursor-pointer flex justify-between items-center transition ${activeTodoTab === 'ADMIN_ASSIGN' ? 'bg-red-50 text-red-700 font-bold border-l-4 border-red-500' : 'hover:bg-gray-50 text-gray-600'}`}
+                                >
+                                    <span>📢 받은 지시사항</span>
+                                    {assignedTasks.filter(t => !t.is_completed).length > 0 && (
+                                        <span className="text-[10px] bg-red-500 text-white px-1.5 py-0.5 rounded-full animate-bounce">
+                                            {assignedTasks.filter(t => !t.is_completed).length}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* (Right) 컨텐츠 영역 */}
+                        <div className="flex-1 bg-white border border-gray-200 rounded-xl shadow-sm flex flex-col overflow-hidden">
+
+                            {/* [A] 받은 업무 지시 리스트 (상담원용 리뉴얼) */}
+                            {activeTodoTab === 'ADMIN_ASSIGN' ? (
+                                <div className="flex flex-col h-full bg-slate-50">
+                                    <div className="p-5 border-b border-gray-200 bg-white">
+                                        <h3 className="font-black text-gray-800 flex items-center gap-2">
+                                            <span className="text-red-500">📢</span> 관리자 전달 사항
+                                        </h3>
+                                        <p className="text-xs text-gray-400 mt-1">본사 및 팀장님이 전달한 업무 지시 목록입니다.</p>
+                                    </div>
+
+                                    <div className="flex-1 overflow-y-auto p-6 space-y-3">
+                                        {assignedTasks.length === 0 ? (
+                                            <div className="flex flex-col items-center justify-center h-full text-gray-300">
+                                                <span className="text-5xl mb-4">🕊️</span>
+                                                <p className="font-bold">현재 전달된 지시사항이 없습니다.</p>
+                                            </div>
+                                        ) : (
+                                            assignedTasks.sort((a, b) => b.id - a.id).map(task => (
+                                                <div key={task.id} className={`p-5 rounded-2xl border-2 transition-all shadow-sm flex flex-col gap-3 ${task.is_completed ? 'bg-gray-100 border-gray-200 opacity-60' : 'bg-white border-red-100 hover:border-red-300'}`}>
+                                                    <div className="flex justify-between items-start">
+                                                        <div className="flex flex-col gap-1">
+                                                            <div className="flex items-center gap-2">
+                                                                {task.is_global ? (
+                                                                    <span className="bg-red-500 text-white text-[9px] px-2 py-0.5 rounded-full font-black">전체공지</span>
+                                                                ) : (
+                                                                    <span className="bg-indigo-100 text-indigo-600 text-[9px] px-2 py-0.5 rounded-full font-black">개인지시</span>
+                                                                )}
+                                                                <span className="text-[11px] text-gray-400 font-mono">{task.created_at}</span>
+                                                            </div>
+                                                            <p className={`text-base leading-relaxed mt-1 ${task.is_completed ? 'text-gray-500 line-through' : 'text-gray-800 font-bold'}`}>
+                                                                {task.content}
+                                                            </p>
+                                                        </div>
+
+                                                        {/* 완료 처리 버튼 */}
+                                                        {!task.is_completed ? (
+                                                            <button
+                                                                onClick={() => {
+                                                                    if (window.confirm("이 업무를 완료 처리하시겠습니까?")) {
+                                                                        // API 호출 로직 (PATCH /api/todos/{id}/ 등)
+                                                                        handleToggleAssignedTask(task.id);
+                                                                    }
+                                                                }}
+                                                                className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-xs font-black shadow-md transition-all active:scale-95 shrink-0"
+                                                            >
+                                                                완료하기
+                                                            </button>
+                                                        ) : (
+                                                            <span className="text-green-500 font-black text-sm flex items-center gap-1">
+                                                                <span className="text-lg">✓</span> 처리완료
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            ) : (
+                                /* [B] 개인 To-Do List (기존 기능 유지) */
+                                <div className="flex flex-col h-full bg-white animate-fade-in">
+                                    <div className="p-6 border-b border-gray-100 bg-white shrink-0">
+                                        <div className="flex justify-between items-end mb-4">
+                                            <div>
+                                                <h2 className="text-2xl font-extrabold text-gray-800 flex items-center gap-2">
+                                                    📅 개인 메모 & 할 일
+                                                </h2>
+                                                <p className="text-sm text-gray-500 mt-1">
+                                                    나만 볼 수 있는 개인 업무 노트입니다.
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        <div className="flex items-center gap-3 bg-gray-50 p-3 rounded-xl border border-gray-200 shadow-sm focus-within:ring-2 focus-within:ring-indigo-100 transition">
+                                            <span className="text-gray-400 pl-2">➕</span>
+                                            <input
+                                                type="text"
+                                                className="flex-1 bg-transparent text-sm font-medium text-gray-800 outline-none placeholder-gray-400"
+                                                placeholder="기억해야 할 일을 입력하세요 (Enter)"
+                                                value={newTodoInput}
+                                                onChange={(e) => setNewTodoInput(e.target.value)}
+                                                onKeyPress={(e) => e.key === 'Enter' && handleAddTodo()}
+                                            />
+                                        </div>
+                                    </div>
+
+                                    <div className="flex-1 overflow-y-auto p-6 custom-scrollbar">
+                                        {(() => {
+                                            const currentTodos = todos.filter(t => activeTodoTab === 'ALL' ? true : t.tabId === activeTodoTab);
+                                            const activeList = currentTodos.filter(t => !t.done).sort((a, b) => b.id - a.id);
+                                            const doneList = currentTodos.filter(t => t.done).sort((a, b) => b.id - a.id);
+
+                                            return (
+                                                <div className="space-y-6">
+                                                    {/* 진행 중 */}
+                                                    <div className="space-y-2">
+                                                        {activeList.map(todo => (
+                                                            <div key={todo.id} draggable={true} onDragStart={(e) => handleDragStart(e, todo.id)}
+                                                                className="group flex items-center gap-3 p-4 bg-white rounded-xl border border-gray-200 shadow-sm hover:border-indigo-300 transition-all">
+                                                                <div onClick={() => handleToggleTodo(todo.id)} className="w-5 h-5 rounded-full border-2 border-gray-300 cursor-pointer hover:border-indigo-500 transition shrink-0"></div>
+                                                                <div className="flex-1 min-w-0">
+                                                                    <p className="text-sm font-bold text-gray-800 truncate">{todo.text}</p>
+                                                                </div>
+                                                                <button onClick={() => handleDeleteTodo(todo.id)} className="text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition">🗑️</button>
+                                                            </div>
+                                                        ))}
+                                                    </div>
+
+                                                    {/* 완료됨 */}
+                                                    {doneList.length > 0 && (
+                                                        <div className="pt-4 border-t border-gray-100">
+                                                            <h4 className="text-xs font-bold text-gray-400 mb-3 uppercase">완료된 항목</h4>
+                                                            <div className="space-y-2">
+                                                                {doneList.map(todo => (
+                                                                    <div key={todo.id} className="flex items-center gap-3 p-3 bg-gray-50 rounded-lg opacity-60">
+                                                                        <div onClick={() => handleToggleTodo(todo.id)} className="w-5 h-5 rounded-full bg-indigo-500 flex items-center justify-center text-white text-[10px] cursor-pointer">✓</div>
+                                                                        <p className="text-sm text-gray-500 line-through flex-1">{todo.text}</p>
+                                                                        <button onClick={() => handleDeleteTodo(todo.id)} className="text-gray-300 hover:text-red-500">✕</button>
+                                                                    </div>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })()}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+
 
             {/* 🟢 [추가] 상담 메모 히스토리 모달 (읽기 전용) */}
             {showHistoryModal && (
@@ -5204,6 +5361,7 @@ function AgentDashboard({ user, onLogout }) {
                     width={1100}
                     height={850}
                     windowKey="admin_policy_viewer_pos"
+                    trigger={policyViewerTrigger}
                 >
                     <div className="flex flex-col h-screen bg-slate-50 font-sans overflow-hidden">
 
