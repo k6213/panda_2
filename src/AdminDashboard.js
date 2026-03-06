@@ -10,14 +10,6 @@ const API_BASE = "https://panda-1-hd18.onrender.com";
 const TIME_OPTIONS = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
 
 
-const SHARED_SUB_TABS = [
-    { id: 'ALL', label: '전체 보기' },
-    { id: '당근', label: '🥕 당근' },
-    { id: '토스', label: '💸 토스' },
-    { id: '실패DB', label: '🚫 실패DB' },
-    { id: '기타', label: '🎸 기타' }
-];
-
 const INITIAL_VISIBLE_COLUMNS = {
     owner_name: true, db: true, accepted: true, installed: true, canceled: true,
     adSpend: true, acceptedRevenue: true, installedRevenue: true, netProfit: true,
@@ -60,6 +52,9 @@ const formatCurrency = (num) => {
     return parseInt(num).toLocaleString();
 };
 
+
+
+
 const formatCallback = (isoString) => {
     if (!isoString) return '';
     const date = new Date(isoString);
@@ -75,6 +70,7 @@ const getBadgeStyle = (status) => {
     switch (status) {
         case '접수완료': return `${baseStyle} bg-green-100 text-green-700 border-green-200`;
         case '설치완료': return `${baseStyle} bg-emerald-100 text-emerald-700 border-emerald-200`;
+        case 'AS반려': return `${baseStyle} bg-orange-100 text-orange-700 border-orange-200`;
         case '해지진행': return `${baseStyle} bg-orange-100 text-orange-700 border-orange-200`;
         case '접수취소': return `${baseStyle} bg-red-100 text-red-700 border-red-200`;
         case '부재': return `${baseStyle} bg-rose-100 text-rose-700 border-rose-200`;
@@ -93,122 +89,146 @@ const autoResizeTextarea = (e) => {
 };
 
 // ==================================================================================
-// 3. 팝업 컴포넌트 (수정됨: 위치 기억 기능 추가)
+// 3. 팝업 컴포넌트 (위치/크기 기억 및 강제 포커스 최적화 버전)
 // ==================================================================================
-const PopoutWindow = ({ title, onClose, children, width = 600, height = 800, windowKey = 'default_popup_pos' }) => {
+const PopoutWindow = ({ title, onClose, children, width = 1100, height = 850, windowKey = 'admin_policy_viewer_pos', trigger }) => {
     const [containerEl, setContainerEl] = useState(null);
     const externalWindow = useRef(null);
 
-    useEffect(() => {
-        // 1. 저장된 위치 불러오기 (없으면 화면 중앙쯤 위치)
-        const savedPos = localStorage.getItem(windowKey);
-        let left = 200;
-        let top = 100;
+    const openOrFocus = useCallback(() => {
+        // 1. 저장된 위치 및 크기 불러오기 (없으면 프롭스로 넘겨받은 초기값 사용)
+        const savedState = localStorage.getItem(windowKey);
+        let left = (window.screen.width - width) / 2;
+        let top = (window.screen.height - height) / 2;
+        let currentWidth = width;
+        let currentHeight = height;
 
-        if (savedPos) {
+        if (savedState) {
             try {
-                const parsed = JSON.parse(savedPos);
-                left = parsed.x;
-                top = parsed.y;
-            } catch (e) { }
-        } else {
-            // 처음 열 때 화면 중앙 정렬 계산
-            left = (window.screen.width - width) / 2;
-            top = (window.screen.height - height) / 2;
+                const parsed = JSON.parse(savedState);
+                // 저장된 값이 유효할 때만 적용
+                if (parsed.w > 200 && parsed.h > 200) {
+                    left = parsed.x;
+                    top = parsed.y;
+                    currentWidth = parsed.w;
+                    currentHeight = parsed.h;
+                }
+            } catch (e) { console.error("팝업 상태 로드 실패", e); }
         }
 
-        // 2. 윈도우 열기 (저장된 left, top 적용)
+        // 2. 창이 없거나 닫혔을 때만 새로 열기
         if (!externalWindow.current || externalWindow.current.closed) {
-            externalWindow.current = window.open(
+            const win = window.open(
                 "",
-                "",
-                `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes`
+                windowKey, // 고유 창 이름
+                `width=${currentWidth},height=${currentHeight},left=${left},top=${top},resizable=yes,scrollbars=yes,status=no,location=no`
             );
+
+            if (!win) {
+                alert("⚠️ 팝업이 차단되었습니다! 브라우저 설정에서 팝업을 허용해주세요.");
+                if (onClose) onClose();
+                return;
+            }
+
+            externalWindow.current = win;
+            setupWindowContent(win);
+        } else {
+            // 3. ⭐️ 이미 열려있다면 화면 맨 앞으로 가져오기 (최소화 해제)
+            externalWindow.current.focus();
         }
+    }, [windowKey, width, height]);
 
-        const win = externalWindow.current;
+    // HTML 구조 및 스타일 주입 함수
+    const setupWindowContent = (win) => {
+        win.document.open();
+        win.document.write(`
+            <!DOCTYPE html>
+            <html lang="ko">
+            <head>
+                <meta charset="utf-8" />
+                <title>${title || "팝업 창"}</title>
+                <style>
+                    body { margin: 0; padding: 0; background-color: #f8fafc; overflow: hidden; }
+                    #popout-root { 
+                        width: 100vw; 
+                        height: 100vh; 
+                        overflow-y: auto; 
+                        display: flex; 
+                        flex-direction: column;
+                    }
+                    /* 스크롤바 최적화 */
+                    ::-webkit-scrollbar { width: 8px; }
+                    ::-webkit-scrollbar-track { background: #f1f1f1; }
+                    ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+                    ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+                </style>
+            </head>
+            <body><div id="popout-root"></div></body>
+            </html>
+        `);
+        win.document.close();
 
-        if (!win) {
-            alert("⚠️ 팝업이 차단되었습니다! 브라우저 주소창 우측의 팝업 차단을 해제해주세요.");
-            if (onClose) onClose();
-            return;
-        }
-
-        // 창 크기 강제 조정
-        try {
-            win.resizeTo(width, height);
-        } catch (e) {
-            console.error("Resizing blocked by browser", e);
-        }
-
-        // 3. HTML 구조 작성 (기존과 동일)
-        try {
-            win.document.open();
-            win.document.write(`
-                <!DOCTYPE html>
-                <html lang="ko">
-                <head>
-                    <meta charset="utf-8" />
-                    <title>${title || "관리자 팝업"}</title>
-                    <style>
-                        body { margin: 0; padding: 0; background-color: #ffffff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-                        #popout-root { height: 100vh; overflow: hidden; }
-                        ::-webkit-scrollbar { display: none; }
-                        * { -ms-overflow-style: none; scrollbar-width: none; }
-                    </style>
-                </head>
-                <body>
-                    <div id="popout-root"></div>
-                </body>
-                </html>
-            `);
-            win.document.close();
-        } catch (e) {
-            console.error("Popup Write Error:", e);
-        }
-
-        // 스타일 복사 및 Tailwind 주입 (기존과 동일)
-        document.querySelectorAll('link[rel="stylesheet"]').forEach(node => {
+        // 부모 창의 스타일(Tailwind 등) 복사
+        document.querySelectorAll('link[rel="stylesheet"], style').forEach(node => {
             win.document.head.appendChild(node.cloneNode(true));
         });
-        document.querySelectorAll('style').forEach(node => {
-            win.document.head.appendChild(node.cloneNode(true));
-        });
+
+        // 팝업 내부에서도 Tailwind 사용 가능하게 주입
         const script = win.document.createElement('script');
         script.src = "https://cdn.tailwindcss.com";
         win.document.head.appendChild(script);
 
-        // 컨테이너 설정
-        setTimeout(() => {
-            const container = win.document.getElementById('popout-root');
-            if (container) setContainerEl(container);
-            else if (onClose) onClose();
-        }, 100);
-
-        // 4. [핵심] 윈도우 위치/상태 감시 및 저장
+        // React Portal 연결을 위한 루트 엘리먼트 설정
         const timer = setInterval(() => {
-            if (win.closed) {
+            const container = win.document.getElementById('popout-root');
+            if (container) {
+                setContainerEl(container);
                 clearInterval(timer);
-                if (onClose) onClose();
-            } else {
-                // ⭐️ 현재 위치를 1초마다 저장 (창을 이동하면 자동 저장됨)
-                // screenX, screenY는 모니터 기준 절대 좌표입니다.
-                const currentPos = { x: win.screenX, y: win.screenY };
-                localStorage.setItem(windowKey, JSON.stringify(currentPos));
             }
-        }, 1000); // 1초마다 위치 확인
+        }, 50);
+    };
+
+    // 최초 마운트 시 실행
+    useEffect(() => {
+        openOrFocus();
+
+        // 창 상태 감시 및 위치/크기 저장 (1.5초 간격으로 부하 감소)
+        const monitorTimer = setInterval(() => {
+            const win = externalWindow.current;
+            if (win) {
+                if (win.closed) {
+                    clearInterval(monitorTimer);
+                    onClose();
+                } else {
+                    // 사용자가 조절한 크기와 위치를 실시간 저장
+                    const currentPos = {
+                        x: win.screenX,
+                        y: win.screenY,
+                        w: win.outerWidth,
+                        h: win.outerHeight
+                    };
+                    localStorage.setItem(windowKey, JSON.stringify(currentPos));
+                }
+            }
+        }, 1500);
 
         return () => {
-            clearInterval(timer);
-            if (win && !win.closed) {
-                win.close();
+            if (externalWindow.current && !externalWindow.current.closed) {
+                externalWindow.current.close();
             }
+            clearInterval(monitorTimer);
         };
-    }, []); // 의존성 배열 비움 (한 번만 실행)
+    }, []);
+
+    // ⭐️ 버튼 재클릭 시(trigger 변경) 창을 앞으로 호출
+    useEffect(() => {
+        if (trigger > 0 && externalWindow.current && !externalWindow.current.closed) {
+            externalWindow.current.focus();
+        }
+    }, [trigger]);
 
     return containerEl ? ReactDOM.createPortal(children, containerEl) : null;
 };
-
 
 // 탭 기본 정보 정의 (ID, 라벨, 기본 표시 여부)
 const DEFAULT_TABS_v2 = [
@@ -244,13 +264,14 @@ function AdminDashboard({ user, onLogout }) {
     const [selectedImages, setSelectedImages] = useState([]); // 선택된 파일 배열
     const [previewUrls, setPreviewUrls] = useState([]);       // 미리보기 URL 배열
     const [isPolicyDragOver, setIsPolicyDragOver] = useState(false); // 드래그 상태
+    const [chatFile, setChatFile] = useState(null);
 
     const [focusedPolicyImage, setFocusedPolicyImage] = useState(null);
 
     const currentUserId = user ? String(user.user_id || user.id) : null;
-
+    const [policyViewerTrigger, setPolicyViewerTrigger] = useState(0);
+    const [chatTrigger, setChatTrigger] = useState(0);
     const [activeTab, setActiveTab] = useState('total_manage');
-    const [periodFilter, setPeriodFilter] = useState('month');
     const [agents, setAgents] = useState([]);
 
      const [isChatOpen, setIsChatOpen] = useState(false);
@@ -260,13 +281,11 @@ function AdminDashboard({ user, onLogout }) {
     const [chatMessages, setChatMessages] = useState([]);
     const [chatInput, setChatInput] = useState('');
     const [isSending, setIsSending] = useState(false);
-    const [chatInputNumber, setChatInputNumber] = useState('');
 
     const [adChannels, setAdChannels] = useState([]);
     const [reasons, setReasons] = useState([]);
     const [customStatuses, setCustomStatuses] = useState([]);
     const [settlementStatuses, setSettlementStatuses] = useState([]);
-    const [bankList, setBankList] = useState([]);
 
     const [clientList, setClientList] = useState([]); // 거래처 목록
     const [newClientInput, setNewClientInput] = useState(''); // 거래처 추가 입력
@@ -283,7 +302,6 @@ function AdminDashboard({ user, onLogout }) {
 
     const [allCustomers, setAllCustomers] = useState([]);
     const [sharedCustomers, setSharedCustomers] = useState([]);
-    const [issueCustomers, setIssueCustomers] = useState([]);
 
     const [viewDuplicatesOnly, setViewDuplicatesOnly] = useState(false);
     const [issueSubTab, setIssueSubTab] = useState('fail');
@@ -299,8 +317,9 @@ function AdminDashboard({ user, onLogout }) {
     const [showUploadModal, setShowUploadModal] = useState(false);
 
     const [showNotiDropdown, setShowNotiDropdown] = useState(false);
-    const [pasteData, setPasteData] = useState('');
     const [parsedData, setParsedData] = useState([]);
+    // 강조할 행의 ID 저장
+    const [highlightedId, setHighlightedId] = useState(null);
 
     // 🟢 [신규] 등록 모달 모드 (single: 건별등록 / bulk: 엑셀일괄)
     const [uploadMode, setUploadMode] = useState('single');
@@ -314,6 +333,27 @@ function AdminDashboard({ user, onLogout }) {
         phone: '',
         memo: ''
     });
+
+    // 공통 확인창 상태
+    const [confirmConfig, setConfirmConfig] = useState({
+        show: false,
+        title: '',
+        message: '',
+        onConfirm: null
+    });
+
+    // 확인창 실행 함수 (helper)
+    const confirmAction = (title, message, action) => {
+        setConfirmConfig({
+            show: true,
+            title: title,
+            message: message,
+            onConfirm: () => {
+                action();
+                setConfirmConfig(prev => ({ ...prev, show: false }));
+            }
+        });
+    };
 
 
     // 탭 설정 로드 (순서 + 보이기/숨기기)
@@ -354,6 +394,35 @@ function AdminDashboard({ user, onLogout }) {
         ));
     };
 
+
+    const handleNotificationClick = async (customer) => {
+        // 1. 알림 끄기 로직 (기존과 동일)
+        const currentList = parseChecklist(customer.checklist);
+        const newList = currentList.filter(item => item !== '알림ON');
+        const updatedChecklist = newList.join(',');
+
+        try {
+            await handleInlineUpdate(customer.id, 'checklist', updatedChecklist);
+
+            // 2. 탭 이동 판별 (기존과 동일)
+            const isLongTermTab = ['가망', '장기가망', '접수완료'].includes(customer.status);
+            if (isLongTermTab) setActiveTab('long_term');
+            else setActiveTab('consult');
+
+            // 3. ⭐️ 수정 포인트: 검색 대신 강조 ID 설정
+            setSearchTerm(''); // 기존 검색어 초기화 (필요시)
+            setHighlightedId(customer.id); // 해당 고객 ID 저장
+
+            // 4. 드롭다운 닫기
+            setShowNotiDropdown(false);
+
+            // 5. (선택사항) 3초 후 강조 표시 해제
+            setTimeout(() => setHighlightedId(null), 3000);
+
+        } catch (e) {
+            console.error("알림 처리 오류:", e);
+        }
+    };
 
     // 🟢 [수정] 건별 등록 제출 핸들러 (직접 입력값 자동 저장 기능 추가)
     const handleSingleSubmit = async () => {
@@ -396,8 +465,6 @@ function AdminDashboard({ user, onLogout }) {
             });
 
             if (res.ok) {
-                alert(`✅ [${finalPlatform}] ${singleData.name} 고객님이 등록되었습니다.`);
-                // 입력창 초기화 (isManual은 끄고, 새로 만든 플랫폼을 기본 선택값으로 지정)
                 setSingleData({
                     platform: finalPlatform,
                     manualPlatform: '',
@@ -438,6 +505,18 @@ function AdminDashboard({ user, onLogout }) {
     useEffect(() => { localStorage.setItem('admin_work_memos', JSON.stringify(workMemos)); }, [workMemos]);
     useEffect(() => { localStorage.setItem('admin_trash_memos', JSON.stringify(trashMemos)); }, [trashMemos]);
 
+    // ⭐️ 알림 클릭 시 해당 행으로 자동 스크롤되는 로직
+    useEffect(() => {
+        if (highlightedId) {
+            setTimeout(() => {
+                const row = document.getElementById(`row-${highlightedId}`);
+                if (row) {
+                    row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+            }, 150); // 탭 전환 시간을 고려해 150ms 정도로 설정
+        }
+    }, [highlightedId]);
+
     // 🎮 메모장 핸들러들
     const handleAddMemoTab = () => {
         const colors = ['bg-yellow-50', 'bg-blue-50', 'bg-green-50', 'bg-pink-50', 'bg-purple-50'];
@@ -475,22 +554,11 @@ function AdminDashboard({ user, onLogout }) {
 
     // 영구 삭제
     const handlePermanentDelete = (id) => {
-        if (window.confirm("영구 삭제하시겠습니까? 복구가 불가능합니다.")) {
+        confirmAction("⚠️ 영구 삭제", "영구 삭제하시겠습니까? 복구가 불가능합니다.", () => {
             setTrashMemos(trashMemos.filter(m => m.id !== id));
-        }
+        });
     };
 
-
-    const handleDeleteMemoTab = (e, id) => {
-        e.stopPropagation();
-        if (workMemos.length === 1) return alert("최소 하나의 메모는 있어야 합니다.");
-        if (!window.confirm("이 메모를 삭제하시겠습니까?")) return;
-
-        const filtered = workMemos.filter(m => m.id !== id);
-        setWorkMemos(filtered);
-        // 삭제된 탭이 활성 탭이었다면 첫 번째 탭으로 이동
-        if (activeMemoId === id) setActiveMemoId(filtered[0].id);
-    };
 
     const handleUpdateMemo = (id, field, value) => {
         setWorkMemos(prev => prev.map(m => m.id === id ? { ...m, [field]: value } : m));
@@ -502,7 +570,12 @@ function AdminDashboard({ user, onLogout }) {
     const [completionTarget, setCompletionTarget] = useState(null);
     const [selectedPlatform, setSelectedPlatform] = useState('KT');
     const [dynamicFormData, setDynamicFormData] = useState({});
-    const [calculatedPolicy, setCalculatedPolicy] = useState(0);
+
+    // AdminDashboard 함수 시작 직후, 다른 useState들이 있는 곳에 추가하세요.
+    const [bankList, setBankList] = useState([]);          // 562라인 오류 해결
+    const [issueCustomers, setIssueCustomers] = useState([]); // 1930라인 오류 해결
+    const [pasteData, setPasteData] = useState('');        // 2631라인 오류 해결
+    const [calculatedPolicy, setCalculatedPolicy] = useState(0); // 2767라인 오류 해결
 
     const [newAgent, setNewAgent] = useState({ username: '', password: '' });
     const [newAdChannel, setNewAdChannel] = useState({ name: '', cost: '' });
@@ -557,19 +630,7 @@ function AdminDashboard({ user, onLogout }) {
         fetch(`${API_BASE}/api/clients/`, { headers })
             .then(res => res.json())
             .then(data => {
-                // 서버 데이터 구조에 따라 매핑 (예: [{id:1, name:'농심'}, ...])
-                // 편의상 이름만 추출해서 관리하거나 객체 그대로 쓸 수 있음. 여기선 이름 문자열 배열로 변환 예시
-                const names = Array.isArray(data) ? data.map(c => c.name) : [];
-                setClientList(names);
-            })
-            .catch(err => console.error(err));
-        fetch(`${API_BASE}/api/clients/`, { headers })
-            .then(res => res.json())
-            .then(data => {
-                // 백엔드에서 [{id:1, name:'농심'}, ...] 형태로 온다고 가정
-                // 편의상 이름만 추출하여 리스트로 관리 (백엔드 Customer 모델이 CharField이므로)
-                const names = Array.isArray(data) ? data.map(c => c.name) : [];
-                setClientList(names);
+                setClientList(Array.isArray(data) ? data : []); // ID와 이름이 포함된 객체 배열 그대로 저장
             })
             .catch(err => console.error("거래처 로드 실패:", err));
 
@@ -589,15 +650,46 @@ function AdminDashboard({ user, onLogout }) {
         });
     };
 
+    // 정책 뷰어 전용 확인창 상태 (기존 confirmConfig와 별개)
+    const [viewerConfirm, setViewerConfirm] = useState({
+        show: false,
+        title: '',
+        message: '',
+        onConfirm: null
+    });
 
-    // 🟢 [신규] 거래처 삭제 핸들러 (이름으로 삭제 가정, 실제론 ID로 하는게 좋음)
-    const handleDeleteClient = (clientName) => {
-        if (!window.confirm(`'${clientName}' 거래처를 삭제하시겠습니까?`)) return;
+    // 정책 뷰어용 확인창 실행 함수
+    const openViewerConfirm = (title, message, action) => {
+        setViewerConfirm({
+            show: true,
+            title: title,
+            message: message,
+            onConfirm: () => {
+                action();
+                setViewerConfirm(prev => ({ ...prev, show: false }));
+            }
+        });
+    };
 
-        // 편의상 리스트에서 이름에 해당하는 ID를 찾아 삭제 요청하는 로직 필요
-        // 여기서는 UI 갱신 예시만 보여드림
-        // 실제 구현: id 찾아서 DELETE /api/clients/{id}/
-        alert("삭제 기능은 백엔드 ID 매핑이 필요합니다.");
+    const handleDeleteClient = (clientId, clientName) => {
+        confirmAction("🏢 거래처 삭제", `'${clientName}' 거래처를 삭제하시겠습니까?`, async () => {
+            try {
+                const res = await fetch(`${API_BASE}/api/clients/${clientId}/`, {
+                    method: 'DELETE',
+                    headers: getAuthHeaders()
+                });
+
+                if (res.ok) {
+                    alert("✅ 거래처가 삭제되었습니다.");
+                    fetchSettings(); // 목록 새로고침
+                } else {
+                    alert("❌ 삭제 실패: 서버 권한을 확인하세요.");
+                }
+            } catch (err) {
+                console.error("삭제 오류:", err);
+                alert("서버 통신 중 오류가 발생했습니다.");
+            }
+        });
     };
 
     // 🟢 [신규] 취소 사유 삭제 핸들러
@@ -828,7 +920,6 @@ function AdminDashboard({ user, onLogout }) {
     const [policyImages, setPolicyImages] = useState({});
     const [newNotice, setNewNotice] = useState({ title: '', content: '', is_important: false });
     const [uploadImage, setUploadImage] = useState(null);
-    const [isBannerVisible, setIsBannerVisible] = useState(true);
 
     // 상태 선언부
     const [policyDeleteTarget, setPolicyDeleteTarget] = useState(null);
@@ -865,6 +956,9 @@ function AdminDashboard({ user, onLogout }) {
     const [historyData, setHistoryData] = useState([]); // 불러온 히스토리 데이터
     const [historyTargetName, setHistoryTargetName] = useState(''); // 히스토리 대상 고객명
 
+    // 🔍 정책 이미지 확대 배율 상태
+    const [zoomScale, setZoomScale] = useState(1);
+
     const [clientTemplates, setClientTemplates] = useState(() => {
         const saved = localStorage.getItem('admin_client_templates');
         return saved ? JSON.parse(saved) : {};
@@ -890,6 +984,19 @@ function AdminDashboard({ user, onLogout }) {
         await handleInlineUpdate(actionMemoTarget.id, memoField, actionMemoText);
         alert("✅ 메모가 저장되었습니다.");
         setShowActionMemo(false);
+    };
+
+    // 1. 순수 상담 메모만 추출 (테이블 표시용)
+    const extractUserMemo = (text) => {
+        if (!text) return "";
+        return text.split("■ 고객정보")[0].trim();
+    };
+
+    // 2. 시스템 접수 양식만 추출 (퀵버튼 모달용)
+    const extractSystemForm = (text) => {
+        if (!text || !text.includes("■ 고객정보")) return "";
+        const startIndex = text.indexOf("■ 고객정보");
+        return text.substring(startIndex).trim();
     };
 
     const handleActionMoveToTodo = () => {
@@ -948,7 +1055,7 @@ function AdminDashboard({ user, onLogout }) {
     // 🟢 [신규] 접수 탭 상태 리스트 (기본값 설정)
     const [receptionList, setReceptionList] = useState(() => {
         const saved = localStorage.getItem('admin_reception_list');
-        return saved ? JSON.parse(saved) : ['접수완료', '해지진행', '설치완료'];
+        return saved ? JSON.parse(saved) : ['접수완료', '해지진행', '설치완료', '접수취소'];
     });
 
     // 🟢 [신규] 설치 탭 상태 리스트
@@ -1001,43 +1108,42 @@ function AdminDashboard({ user, onLogout }) {
     // -------------------------------------------------------------------------
 
     // 1. AS 승인 (관리자 승인 → 수정 잠금)
-    const handleApproveAS = async (customer) => {
-        if (!window.confirm(`[${customer.name}] 님의 AS 요청을 승인하시겠습니까?\n승인 후에는 정보 수정이 제한됩니다.`)) return;
-
-        try {
-            // 로그 남기기
-            await fetch(`${API_BASE}/api/customers/${customer.id}/add_log/`, {
-                method: 'POST',
-                headers: getAuthHeaders(),
-                body: JSON.stringify({ user_id: currentUserId, content: `[시스템] 관리자 AS 승인 완료 (상태 고정)` })
-            });
-
-            // 상태 변경 (AS승인)
-            await handleInlineUpdate(customer.id, 'status', 'AS승인');
-            alert("✅ AS 승인 처리되었습니다.");
-        } catch (e) {
-            alert("처리 중 오류가 발생했습니다.");
-        }
+    const handleApproveAS = (customer) => {
+        confirmAction("✅ AS 승인", `[${customer.name}] 님의 AS 요청을 승인하시겠습니까?`, async () => {
+            try {
+                await fetch(`${API_BASE}/api/customers/${customer.id}/add_log/`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ user_id: currentUserId, content: `[시스템] 관리자 AS 승인 완료` })
+                });
+                await handleInlineUpdate(customer.id, 'status', 'AS승인');
+                alert("처리되었습니다.");
+            } catch (e) { alert("오류 발생"); }
+        });
     };
 
-    // 2. AS 반려 (요청 거절 → 접수완료/설치완료 상태로 복귀)
+    // 약 645라인 부근 handleRejectAS 함수 수정
     const handleRejectAS = async (customer) => {
-        const reason = prompt("반려 사유를 입력해주세요:");
-        if (!reason) return;
+        confirmAction("🆘 AS 반려", `[${customer.name}] 님의 AS 요청을 반려하시겠습니까?\n반려 시 상담원의 '상담' 리스트로 다시 이동합니다.`, async () => {
+            try {
+                // 1. 로그 기록 (히스토리에 관리자 반려 기록을 확실히 남김)
+                await fetch(`${API_BASE}/api/customers/${customer.id}/add_log/`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        user_id: currentUserId,
+                        content: `[시스템] AS 요청 반려됨: 관리자 확인 후 재상담 지시`
+                    })
+                });
 
-        try {
-            await fetch(`${API_BASE}/api/customers/${customer.id}/add_log/`, {
-                method: 'POST',
-                headers: getAuthHeaders(),
-                body: JSON.stringify({ user_id: currentUserId, content: `[시스템] AS 요청 반려 (사유: ${reason})` })
-            });
+                // 2. 상태를 'AS반려'로 변경 (중요: '미통건'으로 바꾸지 마세요!)
+                await handleInlineUpdate(customer.id, 'status', 'AS반려');
 
-            // 원래 상태로 복구 (보통 설치완료 상태에서 AS가 발생하므로 설치완료로 되돌림, 상황에 따라 조정 가능)
-            await handleInlineUpdate(customer.id, 'status', '설치완료');
-            alert("반려되었습니다.");
-        } catch (e) {
-            alert("오류 발생");
-        }
+                alert("반려 처리가 완료되었습니다. AS 탭과 상담 탭 양쪽에서 확인 가능합니다.");
+            } catch (e) {
+                alert("오류 발생");
+            }
+        });
     };
 
     // 3. AS 승인 취소 (승인된 건을 다시 요청 상태로 되돌림 - 관리자 권한)
@@ -1074,11 +1180,10 @@ function AdminDashboard({ user, onLogout }) {
         setNewTodoInput('');
     };
 
-    // 🟢 [TO-DO] 할 일 삭제
     const handleDeleteTodo = (id) => {
-        if (window.confirm('삭제하시겠습니까?')) {
+        confirmAction("🗑️ 할 일 삭제", "이 항목을 삭제하시겠습니까?", () => {
             setTodos(todos.filter(t => t.id !== id));
-        }
+        });
     };
 
     const handleConfirmPolicyDelete = async () => {
@@ -1174,29 +1279,6 @@ function AdminDashboard({ user, onLogout }) {
         }
     };
 
-    const handleExecutePolicyDelete = async () => {
-        if (!policyDeleteTarget) return;
-
-        try {
-            const res = await fetch(`${API_BASE}/api/policies/${policyDeleteTarget.id}/`, {
-                method: 'DELETE',
-                headers: getAuthHeaders()
-            });
-
-            if (res.ok) {
-                alert("✅ 삭제되었습니다.");
-                setPolicyDeleteTarget(null); // 모달 닫기
-                fetchNoticesAndPolicies();   // 리스트 갱신
-            } else {
-                alert("삭제 실패");
-            }
-        } catch (e) {
-            alert("서버 오류 발생");
-        }
-    };
-
-    // React: AdminDashboard 내부 handleSearchEnter 함수 수정
-
     const handleSearchEnter = async (e) => {
         if (e.key !== 'Enter' || !chatListSearch.trim()) return;
 
@@ -1260,6 +1342,18 @@ function AdminDashboard({ user, onLogout }) {
         };
         // 드래그 중 텍스트 선택 방지
         document.body.style.userSelect = 'none';
+    };
+
+    // 긴 접수 양식을 테이블에서 숨기고 일반 메모만 추출하는 함수
+    const getManualMemoOnly = (text) => {
+        if (!text) return "";
+        // 접수 양식의 시작점인 '■ 고객정보'가 포함되어 있다면 그 앞부분(메모)만 반환
+        if (text.includes("■ 고객정보")) {
+            const parts = text.split("■ 고객정보");
+            const manualNote = parts[0].trim();
+            return manualNote ? manualNote : "[📄 접수양식 등록됨]";
+        }
+        return text;
     };
 
 
@@ -1328,7 +1422,6 @@ function AdminDashboard({ user, onLogout }) {
 
     // 🟢 [채팅방] 이미지 드래그 앤 드롭 상태
     const [isDragOver, setIsDragOver] = useState(false);
-    const [chatFile, setChatFile] = useState(null); // 첨부된 파일
 
     // 🟢 [채팅방] 파일 드롭 핸들러
     const handleFileDrop = (e) => {
@@ -1428,35 +1521,26 @@ function AdminDashboard({ user, onLogout }) {
         ));
     };
 
-    // ✅ 이 함수를 새로 복사해서 넣어주세요.
-    // AdminDashboard.js 내부
-
     const handleDeleteServerImage = async (imageId) => {
-        // 🔍 브라우저 콘솔(F12)에서 이 로그가 찍히는지 꼭 확인하세요!
-        console.log("삭제 요청 대상 ID:", imageId);
+        if (!imageId) return alert("이미지 ID를 찾을 수 없습니다.");
 
-        if (!imageId) {
-            alert("이미지 ID를 찾을 수 없습니다. 페이지를 새로고침(F5) 해주세요.");
-            return;
-        }
-
-        if (!window.confirm("이 정책 이미지를 영구 삭제하시겠습니까?")) return;
-
-        try {
-            const res = await fetch(`${API_BASE}/api/policies/${imageId}/`, {
-                method: 'DELETE',
-                headers: getAuthHeaders() // 🔑 Authorization Token이 포함되어야 합니다.
-            });
-
-            if (res.ok) {
-                alert("✅ 삭제되었습니다.");
-                fetchNoticesAndPolicies(); // 목록 새로고침
-            } else {
-                alert("삭제 실패: 서버 권한 설정을 확인하세요.");
+        // 부모 창의 confirmAction 대신 뷰어 전용 openViewerConfirm 호출
+        openViewerConfirm("⚠️ 이미지 영구 삭제", "이 정책 이미지를 서버에서 완전히 삭제하시겠습니까?", async () => {
+            try {
+                const res = await fetch(`${API_BASE}/api/policies/${imageId}/`, {
+                    method: 'DELETE',
+                    headers: getAuthHeaders()
+                });
+                if (res.ok) {
+                    fetchNoticesAndPolicies();
+                } else {
+                    alert("삭제 실패: 권한이 없습니다.");
+                }
+            } catch (e) {
+                console.error(e);
+                alert("서버 통신 오류");
             }
-        } catch (e) {
-            alert("서버와 통신할 수 없습니다.");
-        }
+        });
     };
 
     // 🟢 [수정] 상담 메모 키보드 핸들러 (Ctrl+Enter 줄바꿈 기능 추가)
@@ -1584,9 +1668,10 @@ function AdminDashboard({ user, onLogout }) {
 
     // 🟢 [기능] 지시 취소 (삭제)
     const handleDeleteAssignedTask = async (taskId) => {
-        if (!window.confirm("지시를 취소(삭제)하시겠습니까?")) return;
-        await fetch(`${API_BASE}/api/todos/${taskId}/`, { method: 'DELETE', headers: getAuthHeaders() });
-        fetchAssignedTasks();
+        confirmAction("🗑️ 지시 취소", "이 업무 지시를 삭제하시겠습니까?", async () => {
+            await fetch(`${API_BASE}/api/todos/${taskId}/`, { method: 'DELETE', headers: getAuthHeaders() });
+            fetchAssignedTasks();
+        });
     };
 
 
@@ -1712,29 +1797,6 @@ function AdminDashboard({ user, onLogout }) {
     );
 
 
-    // 🔵 [수정] 연동 테스트 버튼 핸들러
-    const handleMobileTest = async () => {
-        const testNumber = prompt("테스트 문자를 수신할 번호를 입력하세요 (- 제외):");
-        if (!testNumber) return;
-
-        try {
-            const res = await fetch(`${API_BASE}/api/sms/test_connection/`, {
-                method: 'POST',
-                headers: getAuthHeaders(),
-                body: JSON.stringify({
-                    phone: testNumber.replace(/[^0-9]/g, ''),
-                    gateway_config: smsConfig // ⭐️ 현재 입력된 URL, ID, PW를 백엔드로 전송
-                })
-            });
-
-            const data = await res.json();
-            if (res.ok) alert("🚀 테스트 신호 발송 성공! 앱의 발송 이력을 확인하세요.");
-            else alert(`❌ 연동 실패: ${data.message}`);
-        } catch (e) {
-            alert("서버 통신 오류가 발생했습니다.");
-        }
-    };
-
     // 🟢 [신규] 설정값 서버 저장 (선택 사항)
     const handleSaveSmsGateway = async () => {
         alert("✅ 브라우저와 연동 설정이 임시 저장되었습니다.\n테스트 버튼으로 연동 상태를 확인해 보세요.");
@@ -1812,16 +1874,15 @@ function AdminDashboard({ user, onLogout }) {
     // 폴더 삭제
     const handleDeleteLtFolder = (id, e) => {
         e.stopPropagation();
-        if (window.confirm("폴더를 삭제하시겠습니까? (안의 데이터는 '미분류'로 이동됩니다)")) {
+        confirmAction("📁 폴더 삭제", "폴더를 삭제하시겠습니까? 안의 데이터는 '미분류'로 이동됩니다.", () => {
             setLtFolders(ltFolders.filter(f => f.id !== id));
-            // 해당 폴더에 있던 고객들의 매핑 정보 삭제
             const newAssign = { ...ltAssignments };
             Object.keys(newAssign).forEach(key => {
                 if (newAssign[key] === id) delete newAssign[key];
             });
             setLtAssignments(newAssign);
             setActiveLtFolder('ALL');
-        }
+        });
     };
 
     // 1. 삭제 버튼 클릭 시 대상을 지정하는 함수
@@ -2153,8 +2214,9 @@ function AdminDashboard({ user, onLogout }) {
         else if (activeTab === 'consult') {
             data = allCustomers.filter(c =>
                 String(c.owner) === String(currentUserId) &&
-                !['설치완료', '해지진행', '접수취소', '실패', '실패이관'].includes(c.status)
+                !['설치완료', '해지진행', '접수취소', '실패', '실패이관', '접수완료', 'AS요청', 'AS승인'].includes(c.status)
             );
+            data.sort((a, b) => (a.status === 'AS반려' ? -1 : 1));
             if (statusFilter !== 'ALL') {
                 data = data.filter(c => c.status === statusFilter);
             }
@@ -2167,35 +2229,40 @@ function AdminDashboard({ user, onLogout }) {
         }
 
         // 4. 내 가망관리
+        // 4. 내 가망관리
         else if (activeTab === 'long_term') {
             data = allCustomers.filter(c =>
                 String(c.owner) === String(currentUserId) &&
-                ['장기가망', '접수완료'].includes(c.status)
+                ['가망', '장기가망'].includes(c.status) 
             );
-            if (statusFilter !== 'ALL') {
-                data = data.filter(c => c.status === statusFilter);
-            }
+
             data.sort((a, b) => new Date(a.callback_schedule || 0) - new Date(b.callback_schedule || 0));
         }
 
-        // 5. AS/실패 관리 (4개 탭으로 분리)
+        // 1170라인 근처 displayedData useMemo 내부의 issue_manage 부분
         else if (activeTab === 'issue_manage') {
-            if (issueSubTab === 'fail') {
-                // [실패]
-                data = allCustomers.filter(c => c.status === '실패');
-                if (failReasonFilter) data = data.filter(c => c.detail_reason === failReasonFilter);
+            if (issueSubTab === 'as') {
+                data = allCustomers.filter(c => ['AS요청', 'AS승인', 'AS반려'].includes(c.status));
+            }
+            else if (issueSubTab === 'fail') {
+                // 상태가 '실패'이거나, 복구된 데이터 중 '[실패건]' 태그가 있는 경우만
+                data = allCustomers.filter(c =>
+                    c.status === '실패' || c.detail_reason?.includes('[실패건]')
+                );
+                if (failReasonFilter) data = data.filter(c => c.detail_reason?.includes(failReasonFilter));
             }
             else if (issueSubTab === 'cancel') {
-                // [접수취소]
-                data = allCustomers.filter(c => c.status === '접수취소');
+                // 상태가 '접수취소'이거나, 복구된 데이터 중 '[취소건]' 태그가 있는 경우만
+                data = allCustomers.filter(c =>
+                    c.status === '접수취소' || c.detail_reason?.includes('[취소건]')
+                );
             }
             else if (issueSubTab === 'termination') {
-                // [해지] (해지, 해지진행 등 포함)
-                data = allCustomers.filter(c => c.status === '해지' || c.status === '해지진행');
-            }
-            else {
-                // [AS 요청] (기본값) - AS요청 및 승인 건
-                data = allCustomers.filter(c => c.status === 'AS요청' || c.status === 'AS승인');
+                // ⭐️ 핵심 수정: 상태가 해지 관련이거나, 복구된 데이터 중 '[해지건]' 태그가 있는 경우만
+                data = allCustomers.filter(c =>
+                    ['해지', '해지진행'].includes(c.status) ||
+                    c.detail_reason?.includes('[해지건]')
+                );
             }
         }
 
@@ -2209,7 +2276,7 @@ function AdminDashboard({ user, onLogout }) {
         }
         // 8. 정산관리 (useMemo 내부)
         else if (activeTab === 'settlement') {
-            const targets = (config && config.settlement_target_statuses) ? config.settlement_target_statuses : ['설치완료', '접수완료', '해지진행'];
+            const targets = (config && config.settlement_target_statuses) ? config.settlement_target_statuses : ['설치완료','접수완료','해지진행'];
             data = allCustomers.filter(c => targets.includes(c.status));
             data = data.filter(c => c.status !== '접수취소');
             if (settlementStatusFilter !== 'ALL') data = data.filter(c => c.status === settlementStatusFilter);
@@ -2341,7 +2408,11 @@ function AdminDashboard({ user, onLogout }) {
         return stats;
     }, [allCustomers, monthlyAdSpends]); // 🔴 의존성 배열도 allCustomers로 변경
 
-    const handleOpenChatGlobal = () => { setChatView('LIST'); setIsChatOpen(!isChatOpen); };
+    const handleOpenChatGlobal = () => {
+        setChatView('LIST');
+        setIsChatOpen(true); // 토글(!isChatOpen) 대신 true로 고정하여 이미 열려있어도 작동하게 함
+        setChatTrigger(Date.now()); // 👈 현재 시간을 넣어 트리거 작동
+    };
 
     const fetchChatHistory = async (cid) => {
         try {
@@ -2538,24 +2609,82 @@ function AdminDashboard({ user, onLogout }) {
     };
     const handleDeleteCarrierTab = (tabName) => {
         if (Object.keys(policyData).length <= 1) return alert("최소 1개는 있어야 합니다.");
-        if (window.confirm(`${tabName} 탭을 삭제하시겠습니까?`)) { const newData = { ...policyData }; delete newData[tabName]; setPolicyData(newData); setActivePolicyTab(Object.keys(newData)[0]); }
+        confirmAction("❌ 탭 삭제", `'${tabName}' 탭과 내부의 모든 정책 데이터를 삭제할까요?`, () => {
+            const newData = { ...policyData };
+            delete newData[tabName];
+            setPolicyData(newData);
+            setActivePolicyTab(Object.keys(newData)[0]);
+        });
     };
-    const handleRestoreCustomer = (id) => { if (!window.confirm("복구하시겠습니까?")) return; handleInlineUpdate(id, 'status', '미통건'); };
+
+
+    const handleRestoreCustomer = (customer) => {
+        const targetStatus = '미통건';
+        const message = `[${customer.name}] 님을 '상담대기(미통건)' 상태로 복구하시겠습니까?\n복구 후에도 해당 이슈 관리 탭에 기록이 유지됩니다.`;
+
+        confirmAction("🔄 데이터 복구", message, async () => {
+            try {
+                // 1. 기존 사유 가져오기
+                let currentReason = customer.detail_reason || "";
+                let categoryTag = "";
+
+                // 2. 현재 상태에 따른 고유 태그 결정 (필터와 일치해야 함)
+                if (customer.status === '실패') categoryTag = "[실패건]";
+                else if (customer.status === '접수취소') categoryTag = "[취소건]";
+                else if (customer.status === '해지진행' || customer.status === '해지') categoryTag = "[해지건]";
+
+                // 3. 최종 사유 조합 (이미 복구된 건인지 확인)
+                let finalReason = currentReason;
+                if (!finalReason.includes('(복구됨)')) {
+                    // 태그가 이미 있다면 중복 방지, 없다면 태그 추가
+                    const base = finalReason.includes(categoryTag) ? finalReason : `${categoryTag} ${finalReason}`;
+                    finalReason = `${base.trim()} (복구됨)`;
+                }
+
+                // 4. 로그 기록
+                await fetch(`${API_BASE}/api/customers/${customer.id}/add_log/`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        user_id: currentUserId,
+                        content: `[시스템] ${customer.status} 상태에서 상담 탭으로 복구됨`
+                    })
+                });
+
+                // 5. 서버 업데이트 (상태는 '미통건'으로 가지만, 사유에 태그가 있어 이슈탭에 남음)
+                await fetch(`${API_BASE}/api/customers/${customer.id}/`, {
+                    method: 'PATCH',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        status: targetStatus,
+                        detail_reason: finalReason
+                    })
+                });
+
+                alert(`✅ 복구 완료! '상담' 탭과 현재 탭에서 동시에 확인 가능합니다.`);
+                loadCurrentTabData();
+
+            } catch (e) {
+                console.error(e);
+                alert("복구 중 오류가 발생했습니다.");
+            }
+        });
+    };
+
     const handleDeleteCustomer = (id) => {
         const target = allCustomers.find(c => c.id === id);
-
-        // 🔒 AS 승인 건은 삭제 불가 처리
         if (target && target.status === 'AS승인') {
-            alert("⚠️ AS 승인된 건은 이력 보존을 위해 삭제할 수 없습니다.");
+            alert("⚠️ AS 승인된 건은 삭제할 수 없습니다.");
             return;
         }
 
-        if (window.confirm("정말로 삭제하시겠습니까?")) {
+        // window.confirm 대신 confirmAction 사용
+        confirmAction("🗑️ 고객 삭제", "이 고객의 정보를 정말로 삭제하시겠습니까?", () => {
             fetch(`${API_BASE}/api/customers/${id}/`, {
                 method: 'DELETE',
                 headers: getAuthHeaders()
             }).then(() => loadCurrentTabData());
-        }
+        });
     };
 
     // 기본 핸들러들
@@ -2579,15 +2708,51 @@ function AdminDashboard({ user, onLogout }) {
         }
     };
     const handleAddAdChannel = () => { if (!newAdChannel.name || !newAdChannel.cost) return alert("입력 필요"); fetch(`${API_BASE}/api/ad_channels/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(newAdChannel) }).then(() => { alert("완료"); setNewAdChannel({ name: '', cost: '' }); fetchSettings(); }); };
-    const handleDeleteAdChannel = (id) => { if (window.confirm("삭제?")) fetch(`${API_BASE}/api/ad_channels/${id}/`, { method: 'DELETE', headers: getAuthHeaders() }).then(() => fetchSettings()); };
+    const handleDeleteAdChannel = (id) => {
+        confirmAction("🗑️ 채널 삭제", "이 마케팅 채널을 삭제하시겠습니까?", () => {
+            fetch(`${API_BASE}/api/ad_channels/${id}/`, { method: 'DELETE', headers: getAuthHeaders() })
+                .then(() => fetchSettings());
+        });
+    };
     const handleAddReason = () => { if (!newReason) return; fetch(`${API_BASE}/api/failure_reasons/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ reason: newReason }) }).then(() => { alert("완료"); setNewReason(''); fetchSettings(); }); };
-    const handleDeleteReason = (id) => { if (window.confirm("삭제?")) fetch(`${API_BASE}/api/failure_reasons/${id}/`, { method: 'DELETE', headers: getAuthHeaders() }).then(() => fetchSettings()); };
+    const handleDeleteReason = (id) => {
+        confirmAction("🗑️ 사유 삭제", "이 실패 사유 항목을 삭제하시겠습니까?", () => {
+            fetch(`${API_BASE}/api/failure_reasons/${id}/`, { method: 'DELETE', headers: getAuthHeaders() })
+                .then(() => fetchSettings());
+        });
+    };
     const handleAddStatus = () => { if (!newStatus) return; fetch(`${API_BASE}/api/custom_statuses/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ status: newStatus }) }).then(() => { alert("완료"); setNewStatus(''); fetchSettings(); }); };
-    const handleDeleteStatus = (id) => { if (window.confirm("삭제?")) fetch(`${API_BASE}/api/custom_statuses/${id}/`, { method: 'DELETE', headers: getAuthHeaders() }).then(() => fetchSettings()); };
+    const handleDeleteStatus = (id) => {
+        confirmAction("🗑️ 상태 삭제", "이 상태값 항목을 삭제하시겠습니까?", () => {
+            fetch(`${API_BASE}/api/custom_statuses/${id}/`, { method: 'DELETE', headers: getAuthHeaders() })
+                .then(() => fetchSettings());
+        });
+    };
     const handleAddSettlementStatus = () => { if (!newSettlementStatus) return; fetch(`${API_BASE}/api/settlement_statuses/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ status: newSettlementStatus }) }).then(() => { alert("완료"); setNewSettlementStatus(''); fetchSettings(); }); };
-    const handleDeleteSettlementStatus = (id) => { if (window.confirm("삭제?")) fetch(`${API_BASE}/api/settlement_statuses/${id}/`, { method: 'DELETE', headers: getAuthHeaders() }).then(() => fetchSettings()); };
+    const handleDeleteSettlementStatus = (id) => {
+        confirmAction("🗑️ 정산상태 삭제", "이 정산 상태 항목을 삭제하시겠습니까?", () => {
+            fetch(`${API_BASE}/api/settlement_statuses/${id}/`, { method: 'DELETE', headers: getAuthHeaders() })
+                .then(() => fetchSettings());
+        });
+    };
     const handleSaveSettings = () => { alert("✅ 저장되었습니다."); localStorage.setItem('agent_policy_data_v2', JSON.stringify(policyData)); };
-    const handleAllocate = (refreshCallback) => { if (selectedIds.length === 0 || !targetAgentId) return alert("대상/상담사 선택"); if (!window.confirm("이동?")) return; fetch(`${API_BASE}/api/customers/allocate/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ customer_ids: selectedIds, agent_id: targetAgentId }) }).then(res => res.json()).then(data => { alert(data.message); setSelectedIds([]); if (String(targetAgentId) === String(currentUserId)) { setActiveTab('consult'); } setTargetAgentId(''); if (typeof refreshCallback === 'function') refreshCallback(); else loadCurrentTabData(); }); };
+    const handleAllocate = (refreshCallback) => {
+        if (selectedIds.length === 0 || !targetAgentId) return alert("대상과 상담사를 선택해주세요.");
+
+        confirmAction("⚡ DB 배정", "선택한 데이터를 해당 상담사에게 이동하시겠습니까?", () => {
+            fetch(`${API_BASE}/api/customers/allocate/`, {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ customer_ids: selectedIds, agent_id: targetAgentId })
+            }).then(res => res.json()).then(data => {
+                alert(data.message);
+                setSelectedIds([]);
+                if (String(targetAgentId) === String(currentUserId)) setActiveTab('consult');
+                setTargetAgentId('');
+                if (typeof refreshCallback === 'function') refreshCallback(); else loadCurrentTabData();
+            });
+        });
+    };
     const handlePaste = (e) => {
         e.preventDefault();
         // 클립보드 데이터 가져오기
@@ -2670,7 +2835,6 @@ function AdminDashboard({ user, onLogout }) {
             .then(async (res) => {
                 const data = await res.json();
                 if (res.ok) {
-                    alert(data.message);
                     setShowUploadModal(false); // 모달 닫기
                     setPasteData('');          // 입력창 초기화
                     setParsedData([]);         // 데이터 초기화
@@ -2684,13 +2848,33 @@ function AdminDashboard({ user, onLogout }) {
     const handleSelectAll = (e, dataList) => { if (e.target.checked) setSelectedIds(dataList.map(c => c.id)); else setSelectedIds([]); };
     const handleCheck = (id) => { if (selectedIds.includes(id)) setSelectedIds(selectedIds.filter(sid => sid !== id)); else setSelectedIds([...selectedIds, id]); };
     const getAgentName = (id) => { if (!id) return '-'; if (String(id) === String(currentUserId)) return '👤 나 (관리자)'; const agent = agents.find(a => String(a.id) === String(id)); return agent ? agent.username : '알수없음'; };
-    const handleAssignToMe = (id) => { if (!window.confirm("이 고객을 내 상담 리스트로 가져오시겠습니까?")) return; fetch(`${API_BASE}/api/customers/${id}/assign/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ user_id: currentUserId }) }).then(() => { alert("배정 완료! '내 상담관리' 탭에서 확인하세요."); loadCurrentTabData(); setActiveTab('consult'); }); };
+    const handleAssignToMe = (id) => {
+        confirmAction("⚡ 내 DB로 가져오기", "이 고객을 내 상담 리스트로 가져오시겠습니까?", () => {
+            fetch(`${API_BASE}/api/customers/${id}/assign/`, {
+                method: 'POST',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({ user_id: currentUserId })
+            }).then(() => {
+                alert("배정 완료! '내 상담관리' 탭에서 확인하세요.");
+                loadCurrentTabData();
+                setActiveTab('consult');
+            });
+        });
+    };
     const handleCreateNotice = () => { if (!newNotice.title || !newNotice.content) return alert("제목과 내용을 입력해주세요."); fetch(`${API_BASE}/api/notices/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(newNotice) }).then(() => { alert("공지사항 등록 완료"); setNewNotice({ title: '', content: '', is_important: false }); fetchNoticesAndPolicies(); }); };
-    const handleDeleteNotice = (id) => { if (!window.confirm("삭제하시겠습니까?")) return; fetch(`${API_BASE}/api/notices/${id}/`, { method: 'DELETE', headers: getAuthHeaders() }).then(() => fetchNoticesAndPolicies()); };
-    const handleImageUpload = () => { if (!uploadImage) return alert("이미지를 선택해주세요."); const formData = new FormData(); formData.append('platform', activePolicyTab); formData.append('image', uploadImage); fetch(`${API_BASE}/api/policies/`, { method: 'POST', headers: { 'Authorization': `Token ${sessionStorage.getItem('token')}` }, body: formData }).then(() => { alert("정책 이미지 업로드 완료"); setUploadImage(null); fetchNoticesAndPolicies(); }); };
+    const handleDeleteNotice = (id) => {
+        confirmAction("🗑️ 공지 삭제", "이 공지사항을 삭제하시겠습니까?", () => {
+            fetch(`${API_BASE}/api/notices/${id}/`, { method: 'DELETE', headers: getAuthHeaders() })
+                .then(() => fetchNoticesAndPolicies());
+        });
+    };
     const openRequestModal = (customer) => { setRequestTarget(customer); setShowRequestModal(true); };
     const sendRequest = () => { if (!requestTarget) return; setAllCustomers(prev => prev.map(c => c.id === requestTarget.id ? { ...c, request_status: 'REQUESTED', request_message: requestMessage } : c)); fetch(`${API_BASE}/api/customers/${requestTarget.id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify({ request_status: 'REQUESTED', request_message: requestMessage }) }).then(() => { alert("확인 요청이 전송되었습니다."); setShowRequestModal(false); setRequestMessage(''); setRequestTarget(null); }).catch(err => alert("요청 실패")); };
-    const clearRequest = (id) => { if (!window.confirm("완료된 요청을 정리하시겠습니까?")) return; handleInlineUpdate(id, 'request_status', null); };
+    const clearRequest = (id) => {
+        confirmAction("🧹 요청 정리", "완료된 요청을 리스트에서 정리하시겠습니까?", () => {
+            handleInlineUpdate(id, 'request_status', null);
+        });
+    };
     const handleToggleAlarm = (e, customer) => { e.stopPropagation(); const currentList = parseChecklist(customer.checklist); const isAlarmOn = currentList.includes('알림ON'); const newList = isAlarmOn ? currentList.filter(item => item !== '알림ON') : [...currentList, '알림ON']; handleInlineUpdate(customer.id, 'checklist', newList.join(',')); };
     const handleCallbackChange = (customer, type, val) => {
         let current = customer.callback_schedule ? new Date(customer.callback_schedule) : new Date();
@@ -2704,8 +2888,7 @@ function AdminDashboard({ user, onLogout }) {
         const yy = newDate.getFullYear(); const mm = String(newDate.getMonth() + 1).padStart(2, '0'); const dd = String(newDate.getDate()).padStart(2, '0'); const hh = String(newDate.getHours()).padStart(2, '0');
         handleInlineUpdate(customer.id, 'callback_schedule', `${yy}-${mm}-${dd}T${hh}:00:00`);
     };
-    const openHistoryModal = (c) => { alert(`${c.name}님의 상세 정보로 이동합니다.`); };
-    const handleAdSpendChange = (value) => { const cleanValue = value.replace(/[^0-9]/g, ''); const currentMonthKey = statDate.substring(0, 7); setMonthlyAdSpends(prev => ({ ...prev, [currentMonthKey]: cleanValue })); setAdSpend(cleanValue); };
+ 
     const handleColumnToggle = (col) => setVisibleColumns(prev => ({ ...prev, [col]: !prev[col] }));
     const handleCardToggle = (card) => setVisibleCards(prev => ({ ...prev, [card]: !prev[card] }));
     const toggleRow = (id) => { const newSet = new Set(expandedRows); if (newSet.has(id)) newSet.delete(id); else newSet.add(id); setExpandedRows(newSet); };
@@ -2721,153 +2904,181 @@ function AdminDashboard({ user, onLogout }) {
         setParsedData(prev => prev.filter(row => row.id !== id));
     };
 
-
-    // 상태 변경 핸들러
+    // 상태 변경 핸들러 (수정완료)
     const handleStatusChangeRequest = async (id, newStatus) => {
+        // 대상 고객 찾기
+        const target = allCustomers.find(c => String(c.id) === String(id));
+        if (!target) return;
 
-
-        // 🟢 [추가됨] 1. 가망등록(복사) 선택 시 로직 (설치완료 탭 전용)
-        // 🟢 [수정됨] 가망등록(복사) 선택 시 로직
+        // 1. 가망등록 (데이터 복사) 로직
         if (newStatus === '가망등록') {
-            const target = allCustomers.find(c => c.id === id);
-            if (!target) return;
+            confirmAction(
+                "⚡ 가망 복사",
+                `[${target.name}] 님을 '내 가망관리' 탭으로 복사하시겠습니까?\n기존 상담 이력을 모두 가져옵니다.`,
+                async () => {
+                    let combinedHistory = "";
+                    try {
+                        // 기존 상담 이력(로그) 불러오기
+                        const logRes = await fetch(`${API_BASE}/api/customers/${target.id}/logs/`, {
+                            headers: getAuthHeaders()
+                        });
 
-            if (!window.confirm(`[${target.name}] 님을 '내 가망관리' 탭으로 복사하시겠습니까?\n\n※ 기존 상담 이력을 모두 가져옵니다.`)) {
-                return;
-            }
+                        if (logRes.ok) {
+                            const logs = await logRes.json();
+                            combinedHistory = logs
+                                .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
+                                .map(log => `[📅 ${new Date(log.created_at).toLocaleString()} / 👤 ${log.user_name || '시스템'}]\n${log.content}`)
+                                .join('\n\n--------------------------------\n\n');
+                        }
+                    } catch (e) {
+                        console.error("히스토리 불러오기 실패", e);
+                        combinedHistory = "(히스토리 불러오기 실패)";
+                    }
 
-            // 1. 기존 상담 이력(로그) 불러오기
-            let combinedHistory = "";
-            try {
-                const logRes = await fetch(`${API_BASE}/api/customers/${target.id}/logs/`, {
-                    headers: getAuthHeaders()
-                });
+                    // 최종 메모 구성
+                    const systemMsg = `[시스템] ID:${target.id}번 고객으로부터 복사됨`;
+                    const finalMemo =
+                        (target.last_memo ? `[기존 마지막 메모]\n${target.last_memo}\n\n` : "") +
+                        `=========== 📜 과거 상담 이력 (ID:${target.id}) ===========\n\n` +
+                        combinedHistory +
+                        `\n\n===================================================\n\n` +
+                        systemMsg;
 
-                if (logRes.ok) {
-                    const logs = await logRes.json();
-                    // 로그를 텍스트로 변환 (최신순 or 과거순 정렬 후 합치기)
-                    combinedHistory = logs
-                        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at)) // 과거 -> 최신 순
-                        .map(log => `[📅 ${new Date(log.created_at).toLocaleString()} / 👤 ${log.user_name || '시스템'}]\n${log.content}`)
-                        .join('\n\n--------------------------------\n\n');
+                    // 복사 데이터 전송
+                    const newCustomerPayload = {
+                        customers: [{
+                            name: target.name,
+                            phone: target.phone,
+                            platform: target.platform,
+                            owner_id: currentUserId,
+                            status: '장기가망',
+                            upload_date: new Date().toISOString().split('T')[0],
+                            last_memo: finalMemo
+                        }]
+                    };
+
+                    try {
+                        const res = await fetch(`${API_BASE}/api/customers/bulk_upload/`, {
+                            method: 'POST',
+                            headers: getAuthHeaders(),
+                            body: JSON.stringify(newCustomerPayload)
+                        });
+                        if (res.ok) alert("✅ 상담 이력과 함께 복사되었습니다.");
+                        else alert("❌ 복사 중 오류가 발생했습니다.");
+                    } catch (err) {
+                        alert("서버 통신 오류");
+                    }
                 }
-            } catch (e) {
-                console.error("히스토리 불러오기 실패", e);
-                combinedHistory = "(히스토리 불러오기 실패)";
-            }
-
-            // 2. 저장할 최종 메모 구성
-            // [현재 메모] + [구분선] + [과거 히스토리 전체] + [시스템 메시지]
-            const systemMsg = `[시스템] 설치완료(ID:${target.id})에서 복사됨 - 이사/해지 후 신규가입 건`;
-
-            const finalMemo =
-                (target.last_memo ? `[마지막 메모]\n${target.last_memo}\n\n` : "") +
-                `=========== 📜 과거 상담 이력 (ID:${target.id}) ===========\n\n` +
-                combinedHistory +
-                `\n\n===================================================\n\n` +
-                systemMsg;
-
-            // 3. 데이터 전송
-            const newCustomerPayload = {
-                customers: [{
-                    name: target.name,
-                    phone: target.phone,
-                    platform: target.platform,
-                    owner_id: currentUserId,
-                    status: '장기가망',
-                    upload_date: new Date().toISOString().split('T')[0],
-                    last_memo: finalMemo // ⭐️ 여기에 합친 내용을 넣습니다.
-                }]
-            };
-
-            try {
-                const res = await fetch(`${API_BASE}/api/customers/bulk_upload/`, {
-                    method: 'POST',
-                    headers: getAuthHeaders(),
-                    body: JSON.stringify(newCustomerPayload)
-                });
-                if (res.ok) {
-                    alert("✅ 상담 이력과 함께 복사되었습니다.");
-                    // loadCurrentTabData(); // 필요 시 주석 해제
-                } else {
-                    alert("오류가 발생했습니다.");
-                }
-            } catch (err) {
-                console.error(err);
-                alert("서버 통신 오류");
-            }
-            return;
+            );
+            return; // 함수 종료
         }
 
-        // 1. 접수완료 처리
+        // 2. 접수완료 (전용 모달 오픈)
         if (newStatus === '접수완료') {
-            const target = allCustomers.find(c => String(c.id) === String(id));
-            if (!target) return;
-
             setCompletionTarget(target);
             const platformKey = target.platform && policyData[target.platform] ? target.platform : 'KT';
             setSelectedPlatform(platformKey);
-
             setDynamicFormData({});
             setCalculatedPolicy(0);
             setShowCompletionModal(true);
             return;
         }
 
-        // 🟢 [추가] 2. 접수 취소 처리 (모달 띄우기 & 즉시 변경 방지)
-        else if (newStatus === '접수취소') {
-            const target = allCustomers.find(c => c.id === id);
-            if (target) {
-                setCancelTarget(target);           // 대상 설정
-                setSelectedCancelReason('');       // 사유 초기화
-                setCancelMemo('');                 // 메모 초기화
-                setIsMoveToPotential(false);       // 이동 옵션 초기화
-                setShowCancelModal(true);          // 모달 열기
-            }
-            return; // ⭐️ 여기서 리턴하여 handleInlineUpdate가 실행되지 않게 막음 (리스트에서 사라짐 방지)
+        if (newStatus === '접수취소') {
+            setCancelTarget(target);        // 취소 대상 고객 저장
+            setSelectedCancelReason('');   // 사유 초기화
+            setCancelMemo('');             // 메모 초기화
+            setIsMoveToPotential(false);   // 가망이동 체크박스 초기화
+            setShowCancelModal(true);      // ⭐️ 이미 존재하던 모달 오픈
+            return; // 여기서 멈춰야 즉시 업데이트가 안 됩니다.
         }
 
-        // 3. 실패 처리 (모달 열기)
-        else if (newStatus === '실패') {
-            const target = allCustomers.find(c => c.id === id);
+        // 4. 실패 (전용 모달 오픈)
+        if (newStatus === '실패') {
             setFailTarget(target);
             setSelectedFailReason('');
             setShowFailModal(true);
             return;
         }
 
-        // 4. 실패이관 처리
-        else if (newStatus === '실패이관') {
-            // ... (기존 실패이관 코드 유지) ...
-            try {
-                await fetch(`${API_BASE}/api/customers/${id}/add_log/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify({ user_id: user.user_id, content: `[시스템] 빠른 실패이관 처리` }) });
-                await fetch(`${API_BASE}/api/customers/${id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify({ status: '실패이관', owner: null }) });
-                loadCurrentTabData();
-            } catch (err) { console.error(err); }
+        // 5. 실패이관 (관리자 확인 후 처리)
+        if (newStatus === '실패이관') {
+            confirmAction(
+                "📤 실패 이관",
+                `[${target.name}] 고객을 실패이관 처리하고 담당 배정을 해제하시겠습니까?`,
+                async () => {
+                    try {
+                        await fetch(`${API_BASE}/api/customers/${id}/add_log/`, {
+                            method: 'POST',
+                            headers: getAuthHeaders(),
+                            body: JSON.stringify({ user_id: currentUserId, content: `[시스템] 빠른 실패이관 처리` })
+                        });
+                        await fetch(`${API_BASE}/api/customers/${id}/`, {
+                            method: 'PATCH',
+                            headers: getAuthHeaders(),
+                            body: JSON.stringify({ status: '실패이관', owner: null })
+                        });
+                        loadCurrentTabData();
+                    } catch (err) { console.error(err); }
+                }
+            );
             return;
         }
 
-        // 5. 그 외 상태 변경 (바로 변경)
+        if (newStatus === 'AS요청') {
+            if (!window.confirm(`[${target.name}] 고객님을 AS 요청 상태로 변경하시겠습니까?`)) return;
+
+            try {
+                // 로그 저장
+                await fetch(`${API_BASE}/api/customers/${id}/add_log/`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        user_id: currentUserId,
+                        content: `[시스템] AS 요청됨 (상태 변경)`
+                    })
+                });
+                // 상태 업데이트
+                await handleInlineUpdate(id, 'status', 'AS요청');
+                return;
+            } catch (err) { console.error(err); }
+        }
+
+        // 6. 그 외 일반적인 상태 변경 (미통건, 부재, 재통 등)
         handleInlineUpdate(id, 'status', newStatus);
     };
 
 
 
-    // 🟢 [추가] 실패 확정 핸들러
-    const handleConfirmFail = () => {
+    // 🟢 [수정] 실패 확정 핸들러 - 로그 기록 추가
+    const handleConfirmFail = async () => {
         if (!failTarget) return;
         if (!selectedFailReason) return alert("❌ 실패 사유를 선택해주세요.");
 
-        fetch(`${API_BASE}/api/customers/${failTarget.id}/`, {
-            method: 'PATCH',
-            headers: getAuthHeaders(),
-            body: JSON.stringify({
-                status: '실패',
-                detail_reason: selectedFailReason
-            })
-        })
-            .then(() => {
-                alert("처리되었습니다.");
+        try {
+            // 1. 고객 상태 및 상세 사유 업데이트
+            const res = await fetch(`${API_BASE}/api/customers/${failTarget.id}/`, {
+                method: 'PATCH',
+                headers: getAuthHeaders(),
+                body: JSON.stringify({
+                    status: '실패',
+                    detail_reason: selectedFailReason
+                })
+            });
+
+            if (res.ok) {
+                // 2. ⭐️ [추가] 실패 기록 로그 저장
+                await fetch(`${API_BASE}/api/customers/${failTarget.id}/add_log/`, {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        user_id: currentUserId,
+                        content: `[시스템] 실패 처리됨. 사유: ${selectedFailReason}`
+                    })
+                });
+
+                alert("실패 처리가 완료되었으며 기록이 저장되었습니다.");
+
                 // 로컬 데이터 즉시 업데이트
                 setAllCustomers(prev => prev.map(c =>
                     c.id === failTarget.id
@@ -2876,8 +3087,10 @@ function AdminDashboard({ user, onLogout }) {
                 ));
                 setShowFailModal(false);
                 setFailTarget(null);
-            })
-            .catch(err => alert("오류 발생: " + err));
+            }
+        } catch (err) {
+            alert("오류 발생: " + err);
+        }
     };
 
     // 🟢 [수정] handleFormDataChange: 상품 선택 시 금액 및 양식 데이터 실시간 연동
@@ -2938,14 +3151,16 @@ function AdminDashboard({ user, onLogout }) {
     const handleConfirmCompletion = (generatedText) => {
         if (!completionTarget) return;
 
-        // 선택된 모든 상품의 정책 합계 계산
         const totalPolicy = Object.values(dynamicFormData).reduce((acc, cur) => acc + (cur.policy || 0), 0);
 
+        // ⭐️ 기존 메모를 가져와서 양식과 결합 (메모가 양식에 덮어씌워지지 않게 함)
+        const existingUserMemo = extractUserMemo(completionTarget.last_memo);
+        const finalMemoToSave = existingUserMemo + (existingUserMemo ? "\n\n" : "") + generatedText;
+
         const payload = {
-            status: '접수완료', // 확실하게 접수완료로 전송
+            status: '접수완료',
             platform: selectedPlatform,
-            // 생성된 양식 텍스트를 메모에 저장
-            last_memo: generatedText || completionTarget.last_memo,
+            last_memo: finalMemoToSave, // 메모 + 양식 통합 저장
             agent_policy: totalPolicy,
             installed_date: null
         };
@@ -2954,35 +3169,17 @@ function AdminDashboard({ user, onLogout }) {
             method: 'PATCH',
             headers: getAuthHeaders(),
             body: JSON.stringify(payload)
-        })
-            .then(async (res) => {
-                if (res.ok) {
-                    // 로그 기록 (양식 텍스트 포함)
-                    const logContent = `[시스템 자동접수]\n통신사: ${selectedPlatform}\n예상 정책금: ${totalPolicy}만원\n\n${generatedText}`;
-
-                    await fetch(`${API_BASE}/api/customers/${completionTarget.id}/add_log/`, {
-                        method: 'POST',
-                        headers: getAuthHeaders(),
-                        body: JSON.stringify({ user_id: currentUserId, content: logContent })
-                    });
-
-                    alert("🎉 접수가 완료되었습니다!");
-                    setShowCompletionModal(false);
-                    setCompletionTarget(null);
-                    loadCurrentTabData(); // 데이터 새로고침
-                    setActiveTab('reception'); // 접수관리 탭으로 이동
-                } else {
-                    alert("접수 처리 중 서버 오류가 발생했습니다.");
-                }
-            })
-            .catch(err => console.error(err));
+        }).then(res => {
+            if (res.ok) {
+                alert("🎉 접수 완료!");
+                setShowCompletionModal(false);
+                loadCurrentTabData();
+            }
+        });
     };
-    const openMemoPopup = (e, customer, field) => { e.stopPropagation(); setMemoPopupTarget(customer); setMemoFieldType(field); setMemoPopupText(customer[field] || ''); };
+
     const saveMemoPopup = () => { if (!memoPopupTarget || !memoFieldType) return; handleInlineUpdate(memoPopupTarget.id, memoFieldType, memoPopupText); setMemoPopupTarget(null); };
     const handleResponse = (status) => { if (!requestTarget) return; setAllCustomers(prev => prev.map(c => c.id === requestTarget.id ? { ...c, request_status: status } : c)); fetch(`${API_BASE}/api/customers/${requestTarget.id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify({ request_status: status }) }).then(() => { alert("처리됨"); setShowResponseModal(false); setRequestTarget(null); }); };
-    const handleResponseAction = (status) => { if (!responseTarget) return; setAllCustomers(prev => prev.map(c => c.id === responseTarget.id ? { ...c, request_status: status } : c)); fetch(`${API_BASE}/api/customers/${responseTarget.id}/`, { method: 'PATCH', headers: getAuthHeaders(), body: JSON.stringify({ request_status: status }) }).then(() => { alert("처리됨"); setShowResponseModal(false); setResponseTarget(null); }); };
-    const enterChatRoom = (c) => { setChatTarget(c); setChatView('ROOM'); setChatMessages([]); fetchChatHistory(c.id); };
-    const backToChatList = () => { setChatView('LIST'); setChatTarget(null); setChatMessages([]); };
     const handleOpenChat = (e, c) => { e.stopPropagation(); e.preventDefault(); setChatTarget(c); setChatView('ROOM'); setChatMessages([]); setIsChatOpen(true); fetchChatHistory(c.id); };
     // 🟢 [수정됨] 텍스트 + 이미지 전송 핸들러
     const handleSendManualChat = async (textToSend = null) => {
@@ -3056,14 +3253,15 @@ function AdminDashboard({ user, onLogout }) {
         return () => clearInterval(interval); // 채팅창 닫으면 중지
     }, [isChatOpen, chatTarget, chatView]);
     const handleCreateAgent = () => { fetch(`${API_BASE}/api/agents/`, { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(newAgent) }).then(res => { if (res.ok) { alert("완료"); setNewAgent({ username: '', password: '' }); fetchAgents(); } else res.json().then(d => alert(d.message)); }); };
-    const handleDeleteAgent = (id, name) => { if (window.confirm(`'${name}' 삭제?`)) fetch(`${API_BASE}/api/agents/${id}/`, { method: 'DELETE', headers: getAuthHeaders() }).then(() => { alert("삭제 완료"); fetchAgents(); }); };
-    const renderInteractiveStars = (id, currentRank) => (
-        <div className="flex cursor-pointer" onClick={(e) => e.stopPropagation()}>
-            {[1, 2, 3, 4, 5].map(star => (
-                <span key={star} className={`text-lg ${star <= currentRank ? 'text-yellow-400' : 'text-gray-300'} hover:scale-125 transition`} onClick={() => handleInlineUpdate(id, 'rank', star)}>★</span>
-            ))}
-        </div>
-    );
+    const handleDeleteAgent = (id, name) => {
+        confirmAction("👤 계정 삭제", `'${name}' 상담사 계정을 삭제하시겠습니까?`, () => {
+            fetch(`${API_BASE}/api/agents/${id}/`, { method: 'DELETE', headers: getAuthHeaders() })
+                .then(() => {
+                    alert("삭제 완료");
+                    fetchAgents();
+                });
+        });
+    };
 
     // ⭐️ [대기 화면] 설정 로딩 중
     if (!config) {
@@ -3163,6 +3361,7 @@ function AdminDashboard({ user, onLogout }) {
                             onClick={() => {
                                 setViewerPlatform('KT');
                                 setShowPolicyViewer(true);
+                                setPolicyViewerTrigger(Date.now());
                                 fetchNoticesAndPolicies();
                             }}
                             className="bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 shadow-sm"
@@ -3228,7 +3427,7 @@ function AdminDashboard({ user, onLogout }) {
                                             <div className="p-8 text-center text-gray-400 text-sm italic">대기중인 알림이 없습니다.</div>
                                         ) : (
                                             notifications.map(n => (
-                                                <div key={n.id} onClick={() => openHistoryModal(n)} className="p-4 border-b border-gray-50 hover:bg-slate-50 cursor-pointer flex justify-between items-center transition">
+                                                <div key={n.id} onClick={() => handleNotificationClick(n)} className="p-4 border-b border-gray-50 hover:bg-slate-50 cursor-pointer flex justify-between items-center transition">
                                                     <div>
                                                         <div className="font-bold text-sm text-gray-800">{n.name}</div>
                                                         <div className="text-[11px] text-gray-400 font-mono">{n.phone}</div>
@@ -3635,10 +3834,23 @@ function AdminDashboard({ user, onLogout }) {
                                                                     )}
                                                                 </>
                                                             ) : (
-                                                                <button onClick={() => handleRestoreCustomer(c.id)} className="bg-white border border-gray-300 text-gray-600 px-2 py-1 rounded text-[10px] font-bold hover:bg-gray-100 transition">복구</button>
+                                                                <button onClick={() => handleRestoreCustomer(c)} className="bg-white border border-gray-300 text-gray-600 px-2 py-1 rounded text-[10px] font-bold hover:bg-gray-100 transition">복구</button>
                                                             )}
                                                             {!isASLocked && (
                                                                 <button onClick={() => handleDeleteCustomer(c.id)} className="text-red-400 hover:text-red-600 text-[10px] font-bold ml-1 px-1">삭제</button>
+                                                            )}
+                                                        </div>
+                                                    </td>
+                                                    <td className="p-3 text-center border-r">
+                                                        <div className="flex flex-col items-center gap-1">
+                                                            <span className={`px-2 py-1 rounded text-[10px] font-black border ${getBadgeStyle(c.status)}`}>
+                                                                {c.status}
+                                                            </span>
+                                                            {/* 사유에 '복구됨'이 포함되어 있으면 작은 배지 표시 */}
+                                                            {c.detail_reason && c.detail_reason.includes('복구됨') && (
+                                                                <span className="text-[9px] bg-green-50 text-green-600 border border-green-200 px-1 rounded font-bold">
+                                                                    복구완료
+                                                                </span>
                                                             )}
                                                         </div>
                                                     </td>
@@ -4182,7 +4394,12 @@ function AdminDashboard({ user, onLogout }) {
                                         const isAlarmOn = checklistItems.includes('알림ON');
 
                                         return (
-                                            <tr key={c.id} className="hover:bg-yellow-50/50 transition duration-150 group">
+                                            <tr
+                                                key={c.id}
+                                                id={`row-${c.id}`}
+                                                className={`transition duration-500 group ${c.id === highlightedId ? 'bg-yellow-200 ring-2 ring-yellow-400 z-10' : 'hover:bg-yellow-50/50'
+                                                    }`}
+                                            >
 
                                                 {/* 1. 체크박스 */}
                                                 <td className="px-3 py-2.5 text-center border-r border-slate-100">
@@ -4294,41 +4511,29 @@ function AdminDashboard({ user, onLogout }) {
                                                     </div>
                                                 </td>
 
-                                                {/* 9. 상담 메모 */}
                                                 <td className="px-3 py-2.5 align-top">
-                                                    <div className="relative group w-full h-8">
+                                                    <div className="flex items-start gap-2 w-full group relative">
                                                         <textarea
-                                                            className="absolute top-0 left-0 w-full h-8 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded px-1 pr-9 text-xs transition-all resize-none leading-normal overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5"
+                                                            className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 text-[12px] overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap"
                                                             rows={1}
-                                                            defaultValue={c.last_memo}
-                                                            onBlur={(e) => {
-                                                                e.target.style.height = '2rem'; // h-8
-                                                                handleInlineUpdate(c.id, 'last_memo', e.target.value);
+                                                            /* ⭐️ 중요: 화면에는 내가 쓴 메모만 보여줌 */
+                                                            value={extractUserMemo(c.last_memo)}
+                                                            onChange={(e) => {
+                                                                // 실시간 타이핑 가능하게 처리
+                                                                const newNote = e.target.value;
+                                                                const systemPart = extractSystemForm(c.last_memo);
+                                                                // 저장 시에는 메모 + 기존 양식을 합쳐서 보냄
+                                                                const merged = newNote + (systemPart ? "\n\n" + systemPart : "");
+                                                                handleInlineUpdate(c.id, 'last_memo', merged);
                                                             }}
-                                                            onKeyDown={(e) => {
-                                                                if (e.key === 'Enter' && e.ctrlKey) {
-                                                                    e.preventDefault();
-                                                                    const val = e.target.value;
-                                                                    const start = e.target.selectionStart;
-                                                                    const end = e.target.selectionEnd;
-                                                                    e.target.value = val.substring(0, start) + "\n" + val.substring(end);
-                                                                    e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                                    e.target.style.height = 'auto';
-                                                                    e.target.style.height = e.target.scrollHeight + 'px';
-                                                                    return;
-                                                                }
-                                                                handleMemoKeyDown(e, c.id, c.name);
-                                                            }}
+                                                            onBlur={(e) => e.target.style.height = '2rem'}
+                                                            onInput={autoResizeTextarea}
                                                             onDoubleClick={() => handleOpenHistory(c)}
-                                                            placeholder="메모 입력..."
-                                                            title="더블클릭하여 히스토리 보기"
+                                                            placeholder="메모..."
                                                         />
-
-                                                        {/* 퀵 액션 버튼: 적당한 크기로 조정 */}
                                                         <button
                                                             onClick={() => openActionMemo(c)}
-                                                            className="absolute right-0 top-1 text-[10px] bg-white border border-gray-300 text-gray-600 px-1.5 py-0.5 rounded shadow-sm hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300 transition z-10 font-bold"
-                                                            title="퀵 액션 (메모/할일/전달)"
+                                                            className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm"
                                                         >
                                                             📝
                                                         </button>
@@ -4487,9 +4692,9 @@ function AdminDashboard({ user, onLogout }) {
                                         return (
                                             <tr
                                                 key={c.id}
-                                                draggable={true}
-                                                onDragStart={(e) => handleLtDragStart(e, c.id)}
-                                                className="hover:bg-yellow-50/50 transition duration-150 group cursor-grab active:cursor-grabbing"
+                                                id={`row-${c.id}`}
+                                                className={`transition duration-500 group cursor-grab active:cursor-grabbing ${c.id === highlightedId ? 'bg-yellow-200 ring-2 ring-yellow-400 z-10' : 'hover:bg-yellow-50/50'
+                                                    }`}
                                             >
 
                                                 {/* 1. 체크박스 */}
@@ -4615,41 +4820,29 @@ function AdminDashboard({ user, onLogout }) {
                                                     </div>
                                                 </td>
 
-                                                {/* 10. 상담 메모 */}
                                                 <td className="px-3 py-2.5 align-top">
-                                                    <div className="relative group w-full h-8">
+                                                    <div className="flex items-start gap-2 w-full group relative">
                                                         <textarea
-                                                            className="absolute top-0 left-0 w-full h-8 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded px-1 pr-9 text-xs transition-all resize-none leading-normal overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5"
+                                                            className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 text-[12px] overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap"
                                                             rows={1}
-                                                            defaultValue={c.last_memo}
-                                                            onBlur={(e) => {
-                                                                e.target.style.height = '2rem'; // h-8
-                                                                handleInlineUpdate(c.id, 'last_memo', e.target.value);
+                                                            /* ⭐️ 중요: 화면에는 내가 쓴 메모만 보여줌 */
+                                                            value={extractUserMemo(c.last_memo)}
+                                                            onChange={(e) => {
+                                                                // 실시간 타이핑 가능하게 처리
+                                                                const newNote = e.target.value;
+                                                                const systemPart = extractSystemForm(c.last_memo);
+                                                                // 저장 시에는 메모 + 기존 양식을 합쳐서 보냄
+                                                                const merged = newNote + (systemPart ? "\n\n" + systemPart : "");
+                                                                handleInlineUpdate(c.id, 'last_memo', merged);
                                                             }}
-                                                            onKeyDown={(e) => {
-                                                                if (e.key === 'Enter' && e.ctrlKey) {
-                                                                    e.preventDefault();
-                                                                    const val = e.target.value;
-                                                                    const start = e.target.selectionStart;
-                                                                    const end = e.target.selectionEnd;
-                                                                    e.target.value = val.substring(0, start) + "\n" + val.substring(end);
-                                                                    e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                                    e.target.style.height = 'auto';
-                                                                    e.target.style.height = e.target.scrollHeight + 'px';
-                                                                    return;
-                                                                }
-                                                                handleMemoKeyDown(e, c.id, c.name);
-                                                            }}
+                                                            onBlur={(e) => e.target.style.height = '2rem'}
+                                                            onInput={autoResizeTextarea}
                                                             onDoubleClick={() => handleOpenHistory(c)}
-                                                            placeholder="메모 입력..."
-                                                            title="더블클릭하여 히스토리 보기"
+                                                            placeholder="메모..."
                                                         />
-
-                                                        {/* 퀵 액션 버튼: 상담관리와 동일한 크기/위치 */}
                                                         <button
                                                             onClick={() => openActionMemo(c)}
-                                                            className="absolute right-0 top-1 text-[10px] bg-white border border-gray-300 text-gray-600 px-1.5 py-0.5 rounded shadow-sm hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300 transition z-10 font-bold"
-                                                            title="퀵 액션 (메모/할일/전달)"
+                                                            className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm"
                                                         >
                                                             📝
                                                         </button>
@@ -5293,41 +5486,29 @@ function AdminDashboard({ user, onLogout }) {
                                                         </div>
                                                     </td>
 
-                                                    {/* 11. 후처리 메모 (퀵 액션 버튼 포함) */}
                                                     <td className="px-3 py-2.5 align-top">
-                                                        <div className="relative group w-full h-8">
+                                                        <div className="flex items-start gap-2 w-full group relative">
                                                             <textarea
-                                                                className={`absolute top-0 left-0 w-full h-8 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded px-1 pr-9 text-xs transition-all resize-none leading-normal overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 ${isPostProcessed ? 'text-gray-400 line-through italic' : 'text-gray-700'}`}
+                                                                className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 text-[12px] overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap"
                                                                 rows={1}
-                                                                defaultValue={c.last_memo}
-                                                                onBlur={(e) => {
-                                                                    e.target.style.height = '2rem';
-                                                                    handleInlineUpdate(c.id, 'last_memo', e.target.value);
+                                                                /* ⭐️ 중요: 화면에는 내가 쓴 메모만 보여줌 */
+                                                                value={extractUserMemo(c.last_memo)}
+                                                                onChange={(e) => {
+                                                                    // 실시간 타이핑 가능하게 처리
+                                                                    const newNote = e.target.value;
+                                                                    const systemPart = extractSystemForm(c.last_memo);
+                                                                    // 저장 시에는 메모 + 기존 양식을 합쳐서 보냄
+                                                                    const merged = newNote + (systemPart ? "\n\n" + systemPart : "");
+                                                                    handleInlineUpdate(c.id, 'last_memo', merged);
                                                                 }}
-                                                                onKeyDown={(e) => {
-                                                                    if (e.key === 'Enter' && e.ctrlKey) {
-                                                                        e.preventDefault();
-                                                                        const val = e.target.value;
-                                                                        const start = e.target.selectionStart;
-                                                                        const end = e.target.selectionEnd;
-                                                                        e.target.value = val.substring(0, start) + "\n" + val.substring(end);
-                                                                        e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                                        e.target.style.height = 'auto';
-                                                                        e.target.style.height = e.target.scrollHeight + 'px';
-                                                                        return;
-                                                                    }
-                                                                    handleMemoKeyDown(e, c.id, c.name);
-                                                                }}
+                                                                onBlur={(e) => e.target.style.height = '2rem'}
+                                                                onInput={autoResizeTextarea}
                                                                 onDoubleClick={() => handleOpenHistory(c)}
-                                                                placeholder={c.status === '해지진행' ? "후처리 내용 입력..." : "메모..."}
-                                                                title="더블클릭하여 히스토리 보기"
+                                                                placeholder="메모..."
                                                             />
-
-                                                            {/* 🟢 [수정됨] 퀵 액션 버튼: 항상 보임, 디자인 통일 */}
                                                             <button
                                                                 onClick={() => openActionMemo(c)}
-                                                                className="absolute right-0 top-1 text-[10px] bg-white border border-gray-300 text-gray-600 px-1.5 py-0.5 rounded shadow-sm hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300 transition z-10 font-bold"
-                                                                title="퀵 액션 (메모/할일/전달)"
+                                                                className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm"
                                                             >
                                                                 📝
                                                             </button>
@@ -5492,20 +5673,25 @@ function AdminDashboard({ user, onLogout }) {
                                                             )}
                                                         </div>
                                                     </td>
-                                                    {/* 10. 후처리 메모 (⭐️ 버튼 상시 노출 및 레이아웃 최적화) */}
-                                                    {/* 🟢 [수정] 설치완료 탭: 메모칸 기능 강화 (줄바꿈 및 자동높이 적용) */}
                                                     <td className="px-3 py-2.5 align-top">
-                                                        <div className="flex items-start gap-2 w-full">
+                                                        <div className="flex items-start gap-2 w-full group relative">
                                                             <textarea
-                                                                className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-sm text-[12px]"
-                                                                defaultValue={c.last_memo}
-                                                                onBlur={(e) => {
-                                                                    e.target.style.height = '2rem'; // 포커스 아웃 시 높이 복구
-                                                                    handleInlineUpdate(c.id, 'last_memo', e.target.value);
-                                                                }}
-                                                                onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)} // ⭐️ 줄바꿈/저장 로직 연결
-                                                                onInput={autoResizeTextarea} // ⭐️ 타이핑 시 높이 자동 조절
+                                                                className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 text-[12px] overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap"
                                                                 rows={1}
+                                                                /* ⭐️ 중요: 화면에는 내가 쓴 메모만 보여줌 */
+                                                                value={extractUserMemo(c.last_memo)}
+                                                                onChange={(e) => {
+                                                                    // 실시간 타이핑 가능하게 처리
+                                                                    const newNote = e.target.value;
+                                                                    const systemPart = extractSystemForm(c.last_memo);
+                                                                    // 저장 시에는 메모 + 기존 양식을 합쳐서 보냄
+                                                                    const merged = newNote + (systemPart ? "\n\n" + systemPart : "");
+                                                                    handleInlineUpdate(c.id, 'last_memo', merged);
+                                                                }}
+                                                                onBlur={(e) => e.target.style.height = '2rem'}
+                                                                onInput={autoResizeTextarea}
+                                                                onDoubleClick={() => handleOpenHistory(c)}
+                                                                placeholder="메모..."
                                                             />
                                                             <button
                                                                 onClick={() => openActionMemo(c)}
@@ -5552,7 +5738,7 @@ function AdminDashboard({ user, onLogout }) {
                                         onChange={e => setClientFilter(e.target.value)}
                                     >
                                         <option value="ALL">🏢 전체 거래처</option>
-                                        {clientList.map(c => <option key={c} value={c}>{c}</option>)}
+                                        {clientList.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                     </select>
                                     <select
                                         className="bg-white border border-gray-300 rounded-lg px-2 py-1.5 text-gray-700 text-xs font-bold outline-none cursor-pointer"
@@ -5625,7 +5811,11 @@ function AdminDashboard({ user, onLogout }) {
                                                             onChange={(e) => handleInlineUpdate(c.id, 'client', e.target.value)}
                                                         >
                                                             <option value="">(미지정)</option>
-                                                            {clientList.map(client => <option key={client} value={client}>{client}</option>)}
+                                                            {clientList.map(c => (
+                                                                <option key={c.id} value={c.name}>
+                                                                    {c.name}
+                                                                </option>
+                                                            ))}
                                                         </select>
                                                     </td>
 
@@ -5697,32 +5887,42 @@ function AdminDashboard({ user, onLogout }) {
                                                         </select>
                                                     </td>
 
-                                                    {/* 11. 정산 메모 + 퀵 액션 */}
-                                                    {/* 🟢 [수정] 정산관리 탭: 메모칸 기능 강화 (줄바꿈 및 자동높이 적용) */}
-                                                    <td className="px-3 py-2 align-top">
-                                                        <div className="flex flex-col gap-1 w-full h-full relative group">
-                                                            <div className="flex items-start gap-2 w-full">
+                                                    {/* 11. 정산 메모 + 퀵 액션 (디자인 리뉴얼 버전) */}
+                                                    <td className="px-3 py-2.5 align-top">
+                                                        <div className="flex flex-col gap-1 w-full h-full">
+                                                            {/* 상단: 메모 입력 및 📝 버튼 (디자인 변경 구간) */}
+                                                            <div className="flex items-start gap-2 w-full group relative">
                                                                 <textarea
-                                                                    className="flex-1 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded p-1 text-[12px] outline-none resize-none min-h-[32px] transition-all focus:bg-white focus:shadow-md"
-                                                                    defaultValue={c.settlement_memo}
+                                                                    className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 text-[12px] overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap"
+                                                                    rows={1}
+                                                                    /* ⭐️ 화면에는 시스템 양식을 제외한 순수 메모만 보여줌 */
+                                                                    value={extractUserMemo(c.settlement_memo)}
+                                                                    onChange={(e) => {
+                                                                        const newNote = e.target.value;
+                                                                        const systemPart = extractSystemForm(c.settlement_memo);
+                                                                        // 저장 시에는 내가 쓴 메모와 기존 시스템 양식을 합쳐서 저장
+                                                                        const merged = newNote + (systemPart ? "\n\n" + systemPart : "");
+                                                                        handleInlineUpdate(c.id, 'settlement_memo', merged);
+                                                                    }}
                                                                     onBlur={(e) => {
                                                                         e.target.style.height = '2rem';
-                                                                        handleInlineUpdate(c.id, 'settlement_memo', e.target.value);
                                                                     }}
-                                                                    onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)} // ⭐️ 줄바꿈/저장 로직 연결
-                                                                    onInput={autoResizeTextarea} // ⭐️ 높이 조절 연결
-                                                                    rows={1}
+                                                                    onInput={autoResizeTextarea}
+                                                                    onDoubleClick={() => handleOpenHistory(c)}
                                                                     placeholder="정산 비고..."
                                                                 />
+
+                                                                {/* 퀵 액션 버튼 (상시 노출 디자인) */}
                                                                 <button
                                                                     onClick={() => openActionMemo(c)}
-                                                                    className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm"
+                                                                    className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm active:scale-95"
+                                                                    title="상세 메모 및 퀵 액션"
                                                                 >
                                                                     📝
                                                                 </button>
                                                             </div>
 
-                                                            {/* 회신 요청 버튼 영역 */}
+                                                            {/* 하단: 담당자 확인 요청 버튼 (기능 및 위치 유지) */}
                                                             <div className="flex justify-end mt-1">
                                                                 <button
                                                                     onClick={() => handleSettlementRequest(c)}
@@ -5840,28 +6040,53 @@ function AdminDashboard({ user, onLogout }) {
                                         </div>
                                     </div>
 
+                                    <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm flex flex-col hover:shadow-md transition-shadow">
+                                        <div className="flex justify-between items-center mb-4">
+                                            <h3 className="font-black text-indigo-900 text-sm flex items-center gap-2">
+                                                <span className="text-lg">🏢</span> 거래처 및 본사 관리
+                                            </h3>
+                                            <span className="text-[10px] bg-indigo-50 text-indigo-600 px-2 py-1 rounded-full font-bold border border-indigo-100">
+                                                총 {clientList.length}개 등록됨
+                                            </span>
+                                        </div>
 
-                                    {/* 🟢 거래처 관리 섹션 */}
-                                    <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                                        <h3 className="font-bold mb-3 text-indigo-800 text-sm">🏢 거래처 관리 (본사/대리점)</h3>
-                                        <div className="flex gap-2 mb-2">
+                                        {/* 입력란: 윈폼 스타일 탈피, 세련된 입력창과 버튼 */}
+                                        <div className="flex gap-2 mb-4 bg-slate-50 p-2 rounded-xl border border-slate-100">
                                             <input
-                                                className="bg-gray-50 p-2 rounded flex-1 border border-gray-300 text-xs outline-none focus:border-indigo-500"
-                                                placeholder="예: 농심본사, 이영자대리점"
+                                                className="flex-1 bg-white px-3 py-2 rounded-lg border border-gray-300 text-xs font-bold outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-500 transition-all placeholder-gray-300"
+                                                placeholder="추가할 거래처명 입력 (예: 농심본사)"
                                                 value={newClientInput}
                                                 onChange={e => setNewClientInput(e.target.value)}
                                                 onKeyPress={(e) => e.key === 'Enter' && handleAddClient()}
                                             />
-                                            <button onClick={handleAddClient} className="bg-indigo-600 px-3 rounded text-white text-xs font-bold hover:bg-indigo-700">Add</button>
+                                            <button
+                                                onClick={handleAddClient}
+                                                className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg text-xs font-black shadow-sm transition active:scale-95"
+                                            >
+                                                추가
+                                            </button>
                                         </div>
-                                        <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto custom-scrollbar">
-                                            {clientList.map((client, idx) => (
-                                                <span key={idx} className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded border border-indigo-100 text-xs flex items-center gap-1">
-                                                    {client}
-                                                    {/* 삭제 버튼은 ID 연동 필요 */}
-                                                    <button onClick={() => handleDeleteClient(client)} className="text-indigo-300 hover:text-red-500 font-bold ml-1">×</button>
-                                                </span>
-                                            ))}
+
+                                        {/* [설정 탭 내부 거래처 리스트 부분] */}
+                                        <div className="flex flex-wrap gap-2 max-h-[180px] overflow-y-auto custom-scrollbar p-1">
+                                            {clientList.length > 0 ? (
+                                                clientList.map((client) => (
+                                                    <div
+                                                        key={client.id} // 고유 ID 사용
+                                                        className="group bg-white hover:bg-indigo-50 border border-gray-200 hover:border-indigo-300 px-3 py-1.5 rounded-full flex items-center gap-2 transition-all shadow-sm"
+                                                    >
+                                                        <span className="text-xs font-bold text-gray-700">{client.name}</span>
+                                                        <button
+                                                            onClick={() => handleDeleteClient(client.id, client.name)} // ID와 이름을 함께 전달
+                                                            className="text-gray-300 hover:text-red-500 font-bold transition-colors text-sm"
+                                                        >
+                                                            ×
+                                                        </button>
+                                                    </div>
+                                                ))
+                                            ) : (
+                                                <p className="text-xs text-gray-400">등록된 거래처가 없습니다.</p>
+                                            )}
                                         </div>
                                     </div>
 
@@ -5960,29 +6185,6 @@ function AdminDashboard({ user, onLogout }) {
                                             ) : (
                                                 <span className="text-xs text-gray-400 p-1">등록된 사유가 없습니다.</span>
                                             )}
-                                        </div>
-                                    </div>
-
-                                    {/* 🟢 9. 거래처 관리 섹션 추가 */}
-                                    <div className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                                        <h3 className="font-bold mb-3 text-indigo-800 text-sm">🏢 거래처 관리</h3>
-                                        <div className="flex gap-2 mb-2">
-                                            <input
-                                                className="bg-gray-50 p-2 rounded flex-1 border border-gray-300 text-xs outline-none focus:border-indigo-500"
-                                                placeholder="예: 농심본사"
-                                                value={newClientInput}
-                                                onChange={e => setNewClientInput(e.target.value)}
-                                            />
-                                            <button onClick={handleAddClient} className="bg-indigo-600 px-3 rounded text-white text-xs font-bold hover:bg-indigo-700">Add</button>
-                                        </div>
-                                        <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
-                                            {clientList.map((client, idx) => (
-                                                <span key={idx} className="bg-indigo-50 text-indigo-700 px-2 py-1 rounded border border-indigo-100 text-xs flex items-center gap-1">
-                                                    {client}
-                                                    {/* 삭제 버튼 연결 필요 */}
-                                                    <button className="text-indigo-300 hover:text-red-500">×</button>
-                                                </span>
-                                            ))}
                                         </div>
                                     </div>
                                 </div>
@@ -6126,7 +6328,11 @@ function AdminDashboard({ user, onLogout }) {
                                                     onChange={(e) => setNewClientInput(e.target.value)}
                                                 >
                                                     <option value="">-- 거래처를 선택하세요 --</option>
-                                                    {clientList.map(c => <option key={c} value={c}>{c}</option>)}
+                                                    {clientList.map(c => (
+                                                        <option key={c.id} value={c.name}>
+                                                            {c.name}
+                                                        </option>
+                                                    ))}
                                                 </select>
 
                                                 {/* 템플릿 에디터 */}
@@ -6156,7 +6362,7 @@ function AdminDashboard({ user, onLogout }) {
 
             {/* 🟢 [개편완료] 접수 완료 모달: 좌측 양식 / 우측 선택 / 상단 탭 */}
             {showCompletionModal && completionTarget && (
-                <PopoutWindow title="📝 접수 양식 작성 및 확정" onClose={() => setShowCompletionModal(false)} width={1100} height={850}>
+                <PopoutWindow title="📝 접수 양식 작성 및 확정" onClose={() => setShowCompletionModal(false)} width={1100} height={850} windowKey="admin_reception_window">
                     <div className="flex flex-col h-full bg-slate-100 font-sans overflow-hidden">
 
                         {/* (1) 상단 통신사 탭 (폴더 스타일) */}
@@ -6439,6 +6645,7 @@ function AdminDashboard({ user, onLogout }) {
                     width={1000}
                     height={800}
                     windowKey="samsung_messenger_v2"
+                    trigger={chatTrigger}
                 >
                     <div className="flex flex-row h-screen bg-white font-sans overflow-hidden text-gray-800">
 
@@ -6975,6 +7182,7 @@ function AdminDashboard({ user, onLogout }) {
                     width={1100}
                     height={850}
                     windowKey="admin_policy_viewer_pos"
+                    trigger={policyViewerTrigger}
                 >
                     <div className="flex flex-col h-screen bg-slate-50 font-sans overflow-hidden">
 
@@ -7032,11 +7240,12 @@ function AdminDashboard({ user, onLogout }) {
                                     <div className="flex-1 overflow-y-auto p-8 bg-slate-200/50 custom-scrollbar flex flex-col items-center gap-12">
                                         {(() => {
                                             const rawData = policyImages[viewerPlatform];
-                                            const imageList = Array.isArray(rawData) ? rawData : [];
+                                            // 데이터가 배열인지 단일 객체인지 확인하여 리스트화
+                                            const imageList = Array.isArray(rawData) ? rawData : (rawData ? [rawData] : []);
 
                                             return imageList.length > 0 ? (
                                                 imageList.map((imgObj, index) => {
-                                                    // 데이터가 {id: 1, url: '...'} 형태인지 확인
+                                                    // ⭐️ 중요: 백엔드에서 준 {id: 1, url: '...'} 구조에서 ID 추출
                                                     const isObject = typeof imgObj === 'object' && imgObj !== null;
                                                     const imageId = isObject ? imgObj.id : null;
                                                     const imageUrl = isObject ? imgObj.url : imgObj;
@@ -7047,17 +7256,17 @@ function AdminDashboard({ user, onLogout }) {
 
                                                     return (
                                                         <div key={imageId || index} className="relative group max-w-5xl w-full mb-10">
-                                                            {/* 🔴 삭제 버튼이 포함된 상단 바 */}
                                                             <div className="absolute -top-9 left-0 right-0 flex justify-between items-end px-1">
                                                                 <span className="bg-white px-3 py-1 rounded-t-lg border-t border-l border-r border-gray-300 text-[11px] font-bold text-gray-500 shadow-sm">
                                                                     📄 {viewerPlatform} 정책서 #{index + 1}
                                                                 </span>
 
+                                                                {/* 🔴 버튼에 imageId가 제대로 전달되도록 수정 */}
                                                                 {imageId ? (
                                                                     <button
                                                                         onClick={(e) => {
                                                                             e.stopPropagation();
-                                                                            handleDeleteServerImage(imageId);
+                                                                            handleDeleteServerImage(imageId); // 위에서 만든 함수 호출
                                                                         }}
                                                                         className="bg-red-500 hover:bg-red-600 text-white text-[10px] font-black px-3 py-1.5 rounded-t-lg transition-all shadow-md active:scale-95"
                                                                     >
@@ -7068,12 +7277,11 @@ function AdminDashboard({ user, onLogout }) {
                                                                 )}
                                                             </div>
 
-                                                            {/* 이미지 카드 */}
-                                                            <div className="relative cursor-zoom-in shadow-2xl rounded-b-2xl overflow-hidden border-4 border-white bg-white">
+                                                            <div className="relative shadow-2xl rounded-b-2xl overflow-hidden border-4 border-white bg-white">
                                                                 <img
                                                                     src={fullUrl}
                                                                     alt="정책"
-                                                                    className="w-full h-auto transition-transform duration-500 group-hover:scale-[1.01]"
+                                                                    className="w-full h-auto cursor-zoom-in"
                                                                     onClick={() => setZoomImg(fullUrl)}
                                                                 />
                                                             </div>
@@ -7081,10 +7289,7 @@ function AdminDashboard({ user, onLogout }) {
                                                     );
                                                 })
                                             ) : (
-                                                <div className="flex-1 flex flex-col items-center justify-center text-gray-400 py-32">
-                                                    <div className="w-24 h-24 bg-gray-200 rounded-full flex items-center justify-center text-5xl mb-6 grayscale opacity-50 shadow-inner">🖼️</div>
-                                                    <p className="text-xl font-black text-gray-500">등록된 '{viewerPlatform}' 정책이 없습니다.</p>
-                                                </div>
+                                                <div className="py-20 text-center text-gray-400 font-bold">등록된 이미지가 없습니다.</div>
                                             );
                                         })()}
                                     </div>
@@ -7160,31 +7365,83 @@ function AdminDashboard({ user, onLogout }) {
                                 </div>
                             )}
 
-                            {/* [C] 이미지 확대 레이어 */}
+                            {/* [C] 이미지 확대 레이어 (휠 줌 & 드래그 최적화 버전) */}
                             {zoomImg && (
                                 <div
-                                    className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex justify-center items-center p-4 animate-fade-in"
-                                    onClick={() => setZoomImg(null)}
+                                    className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-md flex flex-col justify-center items-center p-4 animate-fade-in overflow-hidden"
+                                    onWheel={(e) => {
+                                        // 마우스 휠로 확대/축소
+                                        setZoomScale(prev => {
+                                            const next = prev + (e.deltaY > 0 ? -0.2 : 0.2);
+                                            return Math.min(Math.max(next, 0.5), 5); // 최소 0.5배 ~ 최대 5배 제한
+                                        });
+                                    }}
+                                    onClick={() => { setZoomImg(null); setZoomScale(1); }} // 배경 클릭 시 닫기 및 배율 초기화
                                 >
-                                    <div className="relative max-w-full max-h-full flex flex-col items-center">
+                                    {/* 상단 배율 표시바 */}
+                                    <div className="absolute top-6 flex items-center gap-4 bg-white/10 px-4 py-2 rounded-full border border-white/20 z-[210]">
+                                        <span className="text-white text-xs font-bold">🔍 현재 배율: {Math.round(zoomScale * 100)}%</span>
+                                        <div className="flex gap-2">
+                                            <button onClick={(e) => { e.stopPropagation(); setZoomScale(prev => Math.max(prev - 0.2, 0.5)); }} className="w-6 h-6 flex items-center justify-center bg-white/20 rounded-lg text-white hover:bg-white/40">－</button>
+                                            <button onClick={(e) => { e.stopPropagation(); setZoomScale(1); }} className="px-2 h-6 flex items-center justify-center bg-indigo-600 rounded-lg text-white text-[10px] font-bold">100%</button>
+                                            <button onClick={(e) => { e.stopPropagation(); setZoomScale(prev => Math.min(prev + 0.2, 5)); }} className="w-6 h-6 flex items-center justify-center bg-white/20 rounded-lg text-white hover:bg-white/40">＋</button>
+                                        </div>
+                                    </div>
+
+                                    {/* 이미지 컨테이너 */}
+                                    <div
+                                        className="relative flex justify-center items-center transition-transform duration-200 ease-out cursor-grab active:cursor-grabbing"
+                                        style={{ transform: `scale(${zoomScale})` }}
+                                        onClick={(e) => e.stopPropagation()} // 이미지 클릭 시 닫히지 않게 보호
+                                    >
                                         <img
                                             src={zoomImg}
                                             alt="확대보기"
-                                            className="max-w-full max-h-[85vh] object-contain shadow-2xl rounded-lg scale-100"
-                                            onClick={(e) => e.stopPropagation()}
+                                            className="max-w-[90vw] max-h-[85vh] object-contain shadow-2xl rounded-lg border-4 border-white/10"
+                                            draggable={false} // 이미지 자체 드래그 방지 (줌에 방해됨)
                                         />
-                                        <div className="mt-6 flex gap-4">
+                                    </div>
+
+                                    {/* 하단 컨트롤 및 닫기 */}
+                                    <div className="absolute bottom-10 flex gap-4 z-[210]">
+                                        <button
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                window.open(zoomImg, '_blank');
+                                            }}
+                                            className="bg-white/10 hover:bg-white/20 text-white px-8 py-3 rounded-xl font-bold border border-white/20 transition shadow-xl"
+                                        >
+                                            💾 원본 보기 / 다운로드
+                                        </button>
+                                        <button
+                                            onClick={() => { setZoomImg(null); setZoomScale(1); }}
+                                            className="bg-indigo-600 hover:bg-indigo-700 text-white px-12 py-3 rounded-xl font-black shadow-2xl transition transform active:scale-95"
+                                        >
+                                            닫기 (ESC)
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
+                            {viewerConfirm.show && (
+                                <div className="fixed inset-0 bg-black/60 z-[1000] flex justify-center items-center backdrop-blur-sm animate-fade-in">
+                                    <div className="bg-white p-8 rounded-[24px] w-[380px] shadow-2xl border border-gray-100 flex flex-col items-center text-center">
+                                        <div className="w-16 h-16 bg-red-50 text-red-600 rounded-full flex items-center justify-center text-3xl mb-4">🗑️</div>
+                                        <h3 className="text-xl font-black text-gray-800 mb-2">{viewerConfirm.title}</h3>
+                                        <p className="text-sm text-gray-500 mb-8 whitespace-pre-wrap">{viewerConfirm.message}</p>
+
+                                        <div className="flex gap-3 w-full">
                                             <button
-                                                onClick={() => window.open(zoomImg, '_blank')}
-                                                className="bg-white/10 hover:bg-white/20 text-white px-8 py-3 rounded-xl font-bold border border-white/20 transition shadow-xl"
+                                                onClick={() => setViewerConfirm({ ...viewerConfirm, show: false })}
+                                                className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200 transition"
                                             >
-                                                💾 원본 보기 / 다운로드
+                                                취소
                                             </button>
                                             <button
-                                                onClick={() => setZoomImg(null)}
-                                                className="bg-indigo-600 hover:bg-indigo-700 text-white px-12 py-3 rounded-xl font-black shadow-2xl transition transform active:scale-95"
+                                                onClick={viewerConfirm.onConfirm}
+                                                className="flex-1 py-3 bg-red-600 text-white rounded-xl font-black shadow-lg hover:bg-red-700 transition transform active:scale-95"
                                             >
-                                                닫기 (ESC)
+                                                삭제 실행
                                             </button>
                                         </div>
                                     </div>
@@ -7196,59 +7453,104 @@ function AdminDashboard({ user, onLogout }) {
             )}
 
 
-            {/* 🟢 [추가] 퀵 액션 메모 통합 모달 */}
             {showActionMemo && actionMemoTarget && (
-                <div className="fixed inset-0 bg-black/50 z-[10000] flex justify-center items-center backdrop-blur-sm animate-fade-in">
-                    <div className="bg-white p-6 rounded-2xl w-[450px] border border-gray-200 shadow-2xl flex flex-col gap-4">
-                        <div className="flex justify-between items-center border-b border-gray-100 pb-3">
-                            <h3 className="text-lg font-black text-indigo-900 flex items-center gap-2">
-                                📝 메모 및 액션 처리
-                            </h3>
-                            <button onClick={() => setShowActionMemo(false)} className="text-gray-400 hover:text-red-500 text-2xl font-bold leading-none">×</button>
-                        </div>
+                <div className="fixed inset-0 bg-black/60 z-[10000] flex justify-center items-center backdrop-blur-sm animate-fade-in">
+                    <div className="bg-white rounded-3xl w-[1000px] max-h-[85vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden">
 
-                        <div className="bg-gray-50 p-3 rounded-lg flex justify-between items-center border border-gray-200">
-                            <span className="text-sm font-bold text-gray-800">👤 {actionMemoTarget.name} 님</span>
-                            <span className="text-xs font-mono font-bold text-gray-500">{actionMemoTarget.phone}</span>
-                        </div>
-
-                        <textarea
-                            className="w-full h-32 p-3 bg-white border border-gray-300 rounded-lg text-sm outline-none focus:border-indigo-500 resize-none"
-                            placeholder="메모를 입력하고 원하는 액션을 선택하세요..."
-                            value={actionMemoText}
-                            onChange={(e) => setActionMemoText(e.target.value)}
-                        />
-
-                        {/* 즉시 액션 버튼 3가지 */}
-                        <div className="flex gap-2 mt-2">
-                            <button onClick={handleActionSaveMemoOnly} className="flex-1 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-lg font-bold hover:bg-gray-50 text-xs transition">
-                                💾 일반 저장
-                            </button>
-                            <button onClick={handleActionMoveToTodo} className="flex-1 py-2.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg font-bold hover:bg-blue-100 text-xs transition">
-                                📋 TO-DO 이동
-                            </button>
-                            <button onClick={handleActionMoveToNotepad} className="flex-1 py-2.5 bg-yellow-50 border border-yellow-200 text-yellow-700 rounded-lg font-bold hover:bg-yellow-100 text-xs transition">
-                                📒 메모장 이동
-                            </button>
-                        </div>
-
-                        {/* 관리자: 상담원 전달 */}
-                        <div className="mt-2 pt-4 border-t border-gray-100">
-                            <label className="block text-xs font-bold text-red-500 mb-2">📢 상담원에게 업무 전달 (관리자)</label>
-                            <div className="flex gap-2">
-                                <select
-                                    className="flex-1 p-2 border border-gray-300 rounded-lg text-sm outline-none focus:border-red-500 cursor-pointer"
-                                    value={targetAssignAgent}
-                                    onChange={(e) => setTargetAssignAgent(e.target.value)}
-                                >
-                                    <option value="">-- 전달할 상담원 선택 --</option>
-                                    <option value="ALL">전체 공지</option>
-                                    {agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}
-                                </select>
-                                <button onClick={handleActionAssignToAgent} className="bg-red-500 text-white px-4 rounded-lg font-bold text-xs hover:bg-red-600 transition">
-                                    업무 전달
-                                </button>
+                        {/* 상단 헤더 */}
+                        <div className="bg-slate-50 px-6 py-4 border-b border-gray-200 flex justify-between items-center shrink-0">
+                            <div>
+                                <h3 className="text-lg font-black text-indigo-900 flex items-center gap-2">
+                                    <span>📝 상세 기록 및 업무 관리</span>
+                                    <span className="text-sm font-bold text-gray-400 ml-2">| {actionMemoTarget.name} ({actionMemoTarget.phone})</span>
+                                </h3>
                             </div>
+                            <button onClick={() => setShowActionMemo(false)} className="text-gray-400 hover:text-red-500 text-3xl font-light">×</button>
+                        </div>
+
+                        {/* 메인 컨텐츠: 좌우 2단 레이아웃 */}
+                        <div className="flex flex-1 overflow-hidden p-6 gap-6 bg-white">
+
+                            {/* [LEFT] 자유 메모 및 기능 영역 (60% 비중) */}
+                            <div className="flex-[1.2] flex flex-col min-w-0">
+                                <label className="text-[11px] font-black text-indigo-500 uppercase tracking-wider mb-2">✍️ 상담 메모 작성/수정</label>
+                                <textarea
+                                    className="flex-1 w-full p-4 bg-slate-50 border border-gray-200 rounded-2xl text-sm leading-relaxed outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-500 focus:bg-white transition-all resize-none shadow-inner mb-4"
+                                    placeholder="상담 내용을 입력하세요..."
+                                    value={extractUserMemo(actionMemoText)}
+                                    onChange={(e) => {
+                                        const sysPart = extractSystemForm(actionMemoTarget.last_memo);
+                                        setActionMemoText(e.target.value + (sysPart ? "\n\n" + sysPart : ""));
+                                    }}
+                                />
+
+                                {/* 기능 버튼군 */}
+                                <div className="grid grid-cols-3 gap-2 mb-4">
+                                    <button onClick={handleActionSaveMemoOnly} className="py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs shadow-md hover:bg-indigo-700 transition active:scale-95">💾 메모 저장</button>
+                                    <button onClick={handleActionMoveToTodo} className="py-3 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl font-bold text-xs hover:bg-blue-100 transition">📋 TO-DO 등록</button>
+                                    <button onClick={handleActionMoveToNotepad} className="py-3 bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-xl font-bold text-xs hover:bg-yellow-100 transition">📒 개인노트</button>
+                                </div>
+
+                                {/* 관리자 업무 전달 (하단 배치) */}
+                                <div className="pt-4 border-t border-gray-100">
+                                    <label className="block text-[11px] font-black text-red-500 mb-2 uppercase">📢 담당 상담원 업무 전달</label>
+                                    <div className="flex gap-2 bg-red-50/50 p-2 rounded-2xl border border-red-100">
+                                        <select
+                                            className="flex-1 p-2 bg-white border border-gray-300 rounded-xl text-xs font-bold outline-none focus:border-red-500"
+                                            value={targetAssignAgent}
+                                            onChange={(e) => setTargetAssignAgent(e.target.value)}
+                                        >
+                                            <option value="">대상 선택...</option>
+                                            <option value="ALL">📢 전체 공지</option>
+                                            {agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}
+                                        </select>
+                                        <button
+                                            onClick={handleActionAssignToAgent}
+                                            className="bg-red-500 text-white px-5 rounded-xl font-black text-xs hover:bg-red-600 transition shadow-sm active:scale-95"
+                                        >
+                                            전달
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* [RIGHT] 접수 양식 뷰어 (40% 비중) */}
+                            <div className="flex-1 flex flex-col min-w-0">
+                                <label className="text-[11px] font-black text-emerald-600 uppercase tracking-wider mb-2">📄 등록된 접수 양식</label>
+                                <div className={`flex-1 rounded-2xl border-2 border-dashed flex flex-col overflow-hidden transition-all ${extractSystemForm(actionMemoTarget.last_memo)
+                                        ? 'border-emerald-200 bg-emerald-50/20'
+                                        : 'border-gray-200 bg-gray-50 items-center justify-center'
+                                    }`}>
+                                    {extractSystemForm(actionMemoTarget.last_memo) ? (
+                                        <div className="flex flex-col h-full">
+                                            <div className="p-5 flex-1 overflow-y-auto text-[13px] font-mono leading-relaxed text-gray-700 whitespace-pre-wrap select-all custom-scrollbar">
+                                                {extractSystemForm(actionMemoTarget.last_memo)}
+                                            </div>
+                                            <button
+                                                onClick={() => {
+                                                    navigator.clipboard.writeText(extractSystemForm(actionMemoTarget.last_memo));
+                                                    alert("양식이 클립보드에 복사되었습니다.");
+                                                }}
+                                                className="m-4 py-3 bg-emerald-600 text-white rounded-xl font-black text-xs hover:bg-emerald-700 transition shadow-lg shadow-emerald-100"
+                                            >
+                                                📋 양식 전체 복사하기
+                                            </button>
+                                        </div>
+                                    ) : (
+                                        <div className="text-center p-10 flex flex-col items-center">
+                                            <span className="text-5xl mb-4 opacity-10">📭</span>
+                                            <p className="text-gray-400 text-sm font-bold">생성된 접수 내역이 없습니다.</p>
+                                            <p className="text-[11px] text-gray-300 mt-1">접수 완료 시 이곳에 정보가 노출됩니다.</p>
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+
+                        </div>
+
+                        {/* 하단 안내바 */}
+                        <div className="bg-slate-50 px-6 py-2 border-t text-[10px] text-gray-400 font-medium text-center">
+                            ※ 왼쪽 메모장에서 내용을 수정하고 '메모 저장'을 누르면 접수 양식과 함께 통합 저장됩니다.
                         </div>
                     </div>
                 </div>
@@ -7338,6 +7640,33 @@ function AdminDashboard({ user, onLogout }) {
                     </div>
                 </div>
             )}
+
+            {/* 공통 커스텀 확인 모달 */}
+            {confirmConfig.show && (
+                <div className="fixed inset-0 bg-black/60 z-[20000] flex justify-center items-center backdrop-blur-sm animate-fade-in">
+                    <div className="bg-white p-8 rounded-[24px] w-[380px] shadow-2xl border border-gray-100 flex flex-col items-center text-center">
+                        <div className="w-16 h-16 bg-indigo-50 text-indigo-600 rounded-full flex items-center justify-center text-3xl mb-4">❓</div>
+                        <h3 className="text-xl font-black text-gray-800 mb-2">{confirmConfig.title}</h3>
+                        <p className="text-sm text-gray-500 mb-8 whitespace-pre-wrap">{confirmConfig.message}</p>
+
+                        <div className="flex gap-3 w-full">
+                            <button
+                                onClick={() => setConfirmConfig({ ...confirmConfig, show: false })}
+                                className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200 transition"
+                            >
+                                취소
+                            </button>
+                            <button
+                                onClick={confirmConfig.onConfirm}
+                                className="flex-1 py-3 bg-indigo-600 text-white rounded-xl font-black shadow-lg hover:bg-indigo-700 transition transform active:scale-95"
+                            >
+                                확인
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
         </div>
     );
 }
