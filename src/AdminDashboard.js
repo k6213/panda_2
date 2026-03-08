@@ -1727,9 +1727,8 @@ function AdminDashboard({ user, onLogout }) {
     const [smsConfig, setSmsConfig] = useState(() => {
         const saved = localStorage.getItem('sms_gateway_config');
         return saved ? JSON.parse(saved) : {
-            url: "https://api.sms-gate.app/message",
-            username: "",
-            password: ""
+            url: "https://www.traccar.org/sms/", // ⭐️ Traccar 클라우드 주소로 변경
+            token: "" // ⭐️ 아이디/비번 대신 토큰 하나만 사용
         };
     });
 
@@ -1740,8 +1739,9 @@ function AdminDashboard({ user, onLogout }) {
 
 
     const handleExecuteMobileTest = async () => {
-        if (!smsConfig.username || !smsConfig.password || !testPhoneNumber) {
-            return alert("기기 정보와 테스트할 핸드폰 번호를 모두 입력해주세요.");
+        // 유효성 검사 (토큰과 번호만 체크)
+        if (!smsConfig.token || !testPhoneNumber) {
+            return alert("기기 토큰과 테스트할 핸드폰 번호를 입력해주세요.");
         }
 
         try {
@@ -1750,13 +1750,16 @@ function AdminDashboard({ user, onLogout }) {
                 headers: getAuthHeaders(),
                 body: JSON.stringify({
                     phone: testPhoneNumber.replace(/[^0-9]/g, ''),
-                    gateway_config: smsConfig
+                    gateway_config: {
+                        url: smsConfig.url,
+                        password: smsConfig.token // ⭐️ 쟝고 서버 코드와 맞추기 위해 password 키에 토큰을 담아 보냅니다.
+                    }
                 })
             });
 
             const data = await res.json();
             if (res.ok) {
-                alert("🚀 테스트 신호 발송 성공!\n입력하신 번호로 문자가 오는지 확인하세요.");
+                alert("🚀 테스트 신호 발송 성공!\n핸드폰의 Traccar 앱 로그와 실제 문자를 확인하세요.");
             } else {
                 alert(`❌ 연동 실패: ${data.message}`);
             }
@@ -7560,56 +7563,38 @@ function AdminDashboard({ user, onLogout }) {
             {showMobileModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex justify-center items-center animate-fade-in">
                     <div className="bg-white rounded-3xl shadow-2xl w-[480px] overflow-hidden border border-gray-200">
-                        {/* 헤더 */}
                         <div className="bg-indigo-600 p-5 text-white flex justify-between items-center">
                             <div>
                                 <h3 className="text-lg font-black flex items-center gap-2">
                                     <span>📱</span> 기기 연동 실시간 설정
                                 </h3>
-                                <p className="text-indigo-100 text-[10px] opacity-80">SMSGate 앱 정보를 입력하고 테스트하세요.</p>
+                                <p className="text-indigo-100 text-[10px] opacity-80">Traccar SMS Gateway 토큰 정보를 입력하세요.</p>
                             </div>
                             <button onClick={() => setShowMobileModal(false)} className="text-white/70 hover:text-white text-2xl">×</button>
                         </div>
 
-                        {/* 본문 */}
                         <div className="p-6 space-y-5 bg-slate-50">
-                            {/* 기기 정보 입력 구역 */}
                             <div className="space-y-3 bg-white p-4 rounded-2xl border border-gray-200 shadow-sm">
                                 <div>
-                                    <label className="block text-[10px] font-black text-indigo-400 uppercase mb-1 ml-1">Gateway API URL</label>
+                                    <label className="block text-[10px] font-black text-indigo-400 uppercase mb-1 ml-1">Cloud API URL</label>
                                     <input
                                         type="text"
                                         className="w-full p-2.5 border border-gray-200 rounded-xl text-xs font-mono bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all"
-                                        placeholder="https://api.sms-gate.app/message"
                                         value={smsConfig.url}
                                         onChange={(e) => setSmsConfig({ ...smsConfig, url: e.target.value })}
                                     />
                                 </div>
-                                <div className="grid grid-cols-2 gap-3">
-                                    <div>
-                                        <label className="block text-[10px] font-black text-indigo-400 uppercase mb-1 ml-1">Cloud Username</label>
-                                        <input
-                                            type="text"
-                                            className="w-full p-2.5 border border-gray-200 rounded-xl text-xs font-bold text-indigo-600 bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all"
-                                            placeholder="예: VSZQ5C"
-                                            value={smsConfig.username}
-                                            onChange={(e) => setSmsConfig({ ...smsConfig, username: e.target.value })}
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-[10px] font-black text-indigo-400 uppercase mb-1 ml-1">Cloud Password</label>
-                                        <input
-                                            type="password"
-                                            className="w-full p-2.5 border border-gray-200 rounded-xl text-xs bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all"
-                                            placeholder="Password"
-                                            value={smsConfig.password}
-                                            onChange={(e) => setSmsConfig({ ...smsConfig, password: e.target.value })}
-                                        />
-                                    </div>
+                                <div>
+                                    <label className="block text-[10px] font-black text-indigo-400 uppercase mb-1 ml-1">Cloud Token (사용자 인증키)</label>
+                                    <textarea
+                                        className="w-full h-24 p-2.5 border border-gray-200 rounded-xl text-xs font-mono bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all break-all"
+                                        placeholder="핸드폰 앱의 Cloud Service 탭에서 복사한 아주 긴 토큰을 붙여넣으세요."
+                                        value={smsConfig.token}
+                                        onChange={(e) => setSmsConfig({ ...smsConfig, token: e.target.value })}
+                                    />
                                 </div>
                             </div>
 
-                            {/* 테스트 번호 입력 구역 */}
                             <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 shadow-sm">
                                 <label className="block text-[10px] font-black text-orange-400 uppercase mb-1 ml-1">테스트 수신 번호</label>
                                 <input
@@ -7622,14 +7607,8 @@ function AdminDashboard({ user, onLogout }) {
                             </div>
                         </div>
 
-                        {/* 푸터 버튼 */}
                         <div className="p-4 bg-white border-t border-gray-100 flex gap-2">
-                            <button
-                                onClick={() => setShowMobileModal(false)}
-                                className="flex-1 py-3 text-xs font-bold text-gray-400 hover:text-gray-600 transition"
-                            >
-                                취소
-                            </button>
+                            <button onClick={() => setShowMobileModal(false)} className="flex-1 py-3 text-xs font-bold text-gray-400 hover:text-gray-600 transition">취소</button>
                             <button
                                 onClick={handleExecuteMobileTest}
                                 className="flex-[2] bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl font-black text-sm shadow-lg transition-all active:scale-95 flex justify-center items-center gap-2"
