@@ -15,7 +15,7 @@ const LeadCapture = () => {
         setLoading(true);
         try {
             // 장고 서버의 LeadCaptureView API 호출
-            await axios.post('http://127.0.0.1:8000/api/leads/capture/', {
+            await axios.post('https://panda-1-hd18.onrender.com/api/leads/capture/', {
                 name: form.name,
                 phone: form.phone,
                 agent_id: agentId
