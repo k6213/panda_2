@@ -4,7 +4,7 @@ import ReactDOM from 'react-dom';
 // ==================================================================================
 // 1. 상수 및 설정값
 // ==================================================================================
-const API_BASE = "https://panda-1-hd18.onrender.com";
+const API_BASE = "http://127.0.0.1:8000";
 
 // ⭐️ 화면 렌더링용 상수
 const TIME_OPTIONS = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
@@ -1727,8 +1727,7 @@ function AdminDashboard({ user, onLogout }) {
     const [smsConfig, setSmsConfig] = useState(() => {
         const saved = localStorage.getItem('sms_gateway_config');
         return saved ? JSON.parse(saved) : {
-            url: "https://www.traccar.org/sms/", // ⭐️ Traccar 클라우드 주소로 변경
-            token: "" // ⭐️ 아이디/비번 대신 토큰 하나만 사용
+            token: "" // ⭐️ 토큰만 관리합니다.
         };
     });
 
@@ -1738,8 +1737,8 @@ function AdminDashboard({ user, onLogout }) {
     }, [smsConfig]);
 
 
+    // [테스트 함수 수정] token만 body에 담아 전송
     const handleExecuteMobileTest = async () => {
-        // 유효성 검사 (토큰과 번호만 체크)
         if (!smsConfig.token || !testPhoneNumber) {
             return alert("기기 토큰과 테스트할 핸드폰 번호를 입력해주세요.");
         }
@@ -1750,10 +1749,7 @@ function AdminDashboard({ user, onLogout }) {
                 headers: getAuthHeaders(),
                 body: JSON.stringify({
                     phone: testPhoneNumber.replace(/[^0-9]/g, ''),
-                    gateway_config: {
-                        url: smsConfig.url,
-                        password: smsConfig.token // ⭐️ 쟝고 서버 코드와 맞추기 위해 password 키에 토큰을 담아 보냅니다.
-                    }
+                    token: smsConfig.token // 백엔드에서 url은 고정 처리됨
                 })
             });
 
@@ -1767,6 +1763,7 @@ function AdminDashboard({ user, onLogout }) {
             alert("서버 통신 오류가 발생했습니다.");
         }
     };
+
     // 🟢 [수정] 플랫폼 필터 (platformList State 사용)
     const renderPlatformFilter = () => (
         <div className="flex flex-wrap gap-1 items-center mr-2 bg-gray-100 p-1 rounded-lg border border-gray-200">
@@ -3197,7 +3194,7 @@ function AdminDashboard({ user, onLogout }) {
             // 2. FormData 객체 생성 (파일 전송을 위해 필수)
             const formData = new FormData();
             formData.append('customer_id', chatTarget.id);
-            formData.append('gateway_config', JSON.stringify(smsConfig));
+            formData.append('token', smsConfig.token);
 
             if (msg?.trim()) {
                 formData.append('message', msg);
@@ -7559,61 +7556,73 @@ function AdminDashboard({ user, onLogout }) {
                 </div>
             )}
 
-            {/* 📱 연동 테스트 및 기기 설정 통합 모달 */}
             {showMobileModal && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex justify-center items-center animate-fade-in">
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10000] flex justify-center items-center animate-fade-in">
                     <div className="bg-white rounded-3xl shadow-2xl w-[480px] overflow-hidden border border-gray-200">
-                        <div className="bg-indigo-600 p-5 text-white flex justify-between items-center">
+                        {/* 헤더: 더 깔끔하고 직관적인 제목 */}
+                        <div className="bg-indigo-600 p-6 text-white flex justify-between items-center">
                             <div>
-                                <h3 className="text-lg font-black flex items-center gap-2">
+                                <h3 className="text-xl font-black flex items-center gap-2">
                                     <span>📱</span> 기기 연동 실시간 설정
                                 </h3>
-                                <p className="text-indigo-100 text-[10px] opacity-80">Traccar SMS Gateway 토큰 정보를 입력하세요.</p>
+                                <p className="text-indigo-100 text-[11px] opacity-80 mt-1">Traccar 앱의 Cloud Token을 입력하여 연동을 완료하세요.</p>
                             </div>
-                            <button onClick={() => setShowMobileModal(false)} className="text-white/70 hover:text-white text-2xl">×</button>
+                            <button onClick={() => setShowMobileModal(false)} className="text-white/70 hover:text-white text-3xl">×</button>
                         </div>
 
-                        <div className="p-6 space-y-5 bg-slate-50">
-                            <div className="space-y-3 bg-white p-4 rounded-2xl border border-gray-200 shadow-sm">
-                                <div>
-                                    <label className="block text-[10px] font-black text-indigo-400 uppercase mb-1 ml-1">Cloud API URL</label>
-                                    <input
-                                        type="text"
-                                        className="w-full p-2.5 border border-gray-200 rounded-xl text-xs font-mono bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all"
-                                        value={smsConfig.url}
-                                        onChange={(e) => setSmsConfig({ ...smsConfig, url: e.target.value })}
-                                    />
-                                </div>
-                                <div>
-                                    <label className="block text-[10px] font-black text-indigo-400 uppercase mb-1 ml-1">Cloud Token (사용자 인증키)</label>
+                        <div className="p-6 space-y-6 bg-slate-50">
+                            {/* 토큰 입력 섹션: 강조된 디자인 */}
+                            <div className="space-y-2">
+                                <label className="block text-[11px] font-black text-indigo-500 uppercase ml-1">
+                                    🔑 Cloud Token (기기 인증키)
+                                </label>
+                                <div className="relative group">
                                     <textarea
-                                        className="w-full h-24 p-2.5 border border-gray-200 rounded-xl text-xs font-mono bg-slate-50 focus:bg-white focus:border-indigo-500 outline-none transition-all break-all"
-                                        placeholder="핸드폰 앱의 Cloud Service 탭에서 복사한 아주 긴 토큰을 붙여넣으세요."
+                                        className="w-full h-28 p-4 border-2 border-gray-100 rounded-2xl text-xs font-mono bg-white focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all break-all shadow-sm leading-relaxed"
+                                        placeholder="핸드폰 Traccar 앱 -> Cloud Service 탭에서 복사한 토큰을 여기에 붙여넣으세요."
                                         value={smsConfig.token}
-                                        onChange={(e) => setSmsConfig({ ...smsConfig, token: e.target.value })}
+                                        onChange={(e) => setSmsConfig({ token: e.target.value })}
                                     />
+                                    {smsConfig.token && (
+                                        <button
+                                            onClick={() => setSmsConfig({ token: "" })}
+                                            className="absolute right-3 bottom-3 text-[10px] text-gray-300 hover:text-red-500 font-bold"
+                                        >
+                                            CLEAR
+                                        </button>
+                                    )}
                                 </div>
                             </div>
 
-                            <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 shadow-sm">
-                                <label className="block text-[10px] font-black text-orange-400 uppercase mb-1 ml-1">테스트 수신 번호</label>
+                            {/* 테스트 번호 입력 섹션: 가시성 확보 */}
+                            <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
+                                <label className="block text-[11px] font-black text-gray-400 uppercase mb-2 ml-1">
+                                    📲 테스트 수신 번호
+                                </label>
                                 <input
                                     type="text"
-                                    className="w-full p-3 border-2 border-orange-200 rounded-xl text-base font-black text-orange-600 outline-none focus:border-orange-400 transition-all bg-white"
+                                    className="w-full p-3 border-2 border-slate-100 rounded-xl text-base font-black text-indigo-600 outline-none focus:border-indigo-400 bg-slate-50 transition-all placeholder-gray-300"
                                     placeholder="01012345678"
                                     value={testPhoneNumber}
                                     onChange={(e) => setTestPhoneNumber(e.target.value)}
                                 />
+                                <p className="text-[10px] text-gray-400 mt-2 text-center">숫자만 입력해 주세요. 발송 시 국가번호(+82)가 자동 부여됩니다.</p>
                             </div>
                         </div>
 
-                        <div className="p-4 bg-white border-t border-gray-100 flex gap-2">
-                            <button onClick={() => setShowMobileModal(false)} className="flex-1 py-3 text-xs font-bold text-gray-400 hover:text-gray-600 transition">취소</button>
+                        {/* 하단 액션바 */}
+                        <div className="p-5 bg-white border-t border-gray-100 flex gap-3">
+                            <button
+                                onClick={() => setShowMobileModal(false)}
+                                className="flex-1 py-3.5 text-sm font-bold text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-2xl transition"
+                            >
+                                취소
+                            </button>
                             <button
                                 onClick={handleExecuteMobileTest}
-                                className="flex-[2] bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl font-black text-sm shadow-lg transition-all active:scale-95 flex justify-center items-center gap-2"
+                                className="flex-[2.5] bg-indigo-600 hover:bg-indigo-700 text-white py-3.5 rounded-2xl font-black text-sm shadow-lg shadow-indigo-100 transition-all active:scale-95 flex justify-center items-center gap-2"
                             >
-                                🚀 연동 테스트 시작
+                                🚀 테스트 메시지 발송
                             </button>
                         </div>
                     </div>
