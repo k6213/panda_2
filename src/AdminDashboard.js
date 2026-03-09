@@ -4,7 +4,7 @@ import ReactDOM from 'react-dom';
 // ==================================================================================
 // 1. 상수 및 설정값
 // ==================================================================================
-const API_BASE = "https://panda-1-hd18.onrender.com";
+const API_BASE = "http://127.0.0.1:8000";
 
 // ⭐️ 화면 렌더링용 상수
 const TIME_OPTIONS = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
@@ -310,6 +310,7 @@ function AdminDashboard({ user, onLogout }) {
     const [salesAgentFilter, setSalesAgentFilter] = useState('');
     const [settlementStatusFilter, setSettlementStatusFilter] = useState('ALL');
     const [statusFilter, setStatusFilter] = useState('ALL');
+    const [actionMemoTrigger, setActionMemoTrigger] = useState(0);
 
     const [sharedSubTab, setSharedSubTab] = useState('ALL');
     const [selectedIds, setSelectedIds] = useState([]);
@@ -976,6 +977,7 @@ function AdminDashboard({ user, onLogout }) {
         setActionMemoText(activeTab === 'settlement' ? (customer.settlement_memo || '') : (customer.last_memo || ''));
         setTargetAssignAgent('');
         setShowActionMemo(true);
+        setActionMemoTrigger(Date.now()); // ⭐️ 새로운 창을 띄우거나 기존 창을 앞으로 가져오는 트리거
     };
 
     const handleActionSaveMemoOnly = async () => {
@@ -2240,28 +2242,32 @@ function AdminDashboard({ user, onLogout }) {
         }
 
         // 1170라인 근처 displayedData useMemo 내부의 issue_manage 부분
+        // displayedData useMemo 내부의 issue_manage 섹션 수정
         else if (activeTab === 'issue_manage') {
             if (issueSubTab === 'as') {
+                // AS는 상태값 기준으로만 관리 (요청/승인/반려)
                 data = allCustomers.filter(c => ['AS요청', 'AS승인', 'AS반려'].includes(c.status));
             }
             else if (issueSubTab === 'fail') {
-                // 상태가 '실패'이거나, 복구된 데이터 중 '[실패건]' 태그가 있는 경우만
+                // 현재 상태가 실패이거나, 사유에 [실패건] 태그가 있는 모든 데이터 (복구된 데이터 포함)
                 data = allCustomers.filter(c =>
-                    c.status === '실패' || c.detail_reason?.includes('[실패건]')
+                    c.status === '실패' ||
+                    (c.detail_reason && c.detail_reason.includes('[실패건]'))
                 );
                 if (failReasonFilter) data = data.filter(c => c.detail_reason?.includes(failReasonFilter));
             }
             else if (issueSubTab === 'cancel') {
-                // 상태가 '접수취소'이거나, 복구된 데이터 중 '[취소건]' 태그가 있는 경우만
+                // 현재 상태가 접수취소이거나, 사유에 [취소건] 태그가 있는 모든 데이터
                 data = allCustomers.filter(c =>
-                    c.status === '접수취소' || c.detail_reason?.includes('[취소건]')
+                    c.status === '접수취소' ||
+                    (c.detail_reason && c.detail_reason.includes('[취소건]'))
                 );
             }
             else if (issueSubTab === 'termination') {
-                // ⭐️ 핵심 수정: 상태가 해지 관련이거나, 복구된 데이터 중 '[해지건]' 태그가 있는 경우만
+                // ⭐️ 핵심 수정: 현재 상태가 해지/해지진행이거나, 사유에 [해지건] 태그가 있는 모든 데이터
                 data = allCustomers.filter(c =>
                     ['해지', '해지진행'].includes(c.status) ||
-                    c.detail_reason?.includes('[해지건]')
+                    (c.detail_reason && c.detail_reason.includes('[해지건]'))
                 );
             }
         }
@@ -2620,38 +2626,40 @@ function AdminDashboard({ user, onLogout }) {
 
     const handleRestoreCustomer = (customer) => {
         const targetStatus = '미통건';
-        const message = `[${customer.name}] 님을 '상담대기(미통건)' 상태로 복구하시겠습니까?\n복구 후에도 해당 이슈 관리 탭에 기록이 유지됩니다.`;
+        const message = `[${customer.name}] 님을 '상담대기(미통건)' 상태로 복구하시겠습니까?\n복구 후에도 현재 리스트(이력)에 기록이 유지됩니다.`;
 
         confirmAction("🔄 데이터 복구", message, async () => {
             try {
-                // 1. 기존 사유 가져오기
                 let currentReason = customer.detail_reason || "";
                 let categoryTag = "";
 
-                // 2. 현재 상태에 따른 고유 태그 결정 (필터와 일치해야 함)
+                // 1. 현재 상태에 따라 고유 태그 결정
                 if (customer.status === '실패') categoryTag = "[실패건]";
                 else if (customer.status === '접수취소') categoryTag = "[취소건]";
                 else if (customer.status === '해지진행' || customer.status === '해지') categoryTag = "[해지건]";
 
-                // 3. 최종 사유 조합 (이미 복구된 건인지 확인)
+                // 2. 이미 태그가 있다면 중복 추가 방지, 없다면 태그 추가
                 let finalReason = currentReason;
-                if (!finalReason.includes('(복구됨)')) {
-                    // 태그가 이미 있다면 중복 방지, 없다면 태그 추가
-                    const base = finalReason.includes(categoryTag) ? finalReason : `${categoryTag} ${finalReason}`;
-                    finalReason = `${base.trim()} (복구됨)`;
+                if (categoryTag && !finalReason.includes(categoryTag)) {
+                    finalReason = `${categoryTag} ${finalReason}`.trim();
                 }
 
-                // 4. 로그 기록
+                // 3. 복구 표시 추가 (필수 옵션은 아니지만 구분하기 좋음)
+                if (!finalReason.includes('(복구됨)')) {
+                    finalReason = `${finalReason} (복구됨)`.trim();
+                }
+
+                // 4. 로그 기록 (히스토리에 남김)
                 await fetch(`${API_BASE}/api/customers/${customer.id}/add_log/`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
                     body: JSON.stringify({
                         user_id: currentUserId,
-                        content: `[시스템] ${customer.status} 상태에서 상담 탭으로 복구됨`
+                        content: `[시스템] ${customer.status} 상태에서 상담 탭으로 복구됨 (이력 유지)`
                     })
                 });
 
-                // 5. 서버 업데이트 (상태는 '미통건'으로 가지만, 사유에 태그가 있어 이슈탭에 남음)
+                // 5. 서버 업데이트 (상태는 '미통건'으로 변경하지만, 사유에 태그를 남겨서 필터에 걸리게 함)
                 await fetch(`${API_BASE}/api/customers/${customer.id}/`, {
                     method: 'PATCH',
                     headers: getAuthHeaders(),
@@ -2661,8 +2669,8 @@ function AdminDashboard({ user, onLogout }) {
                     })
                 });
 
-                alert(`✅ 복구 완료! '상담' 탭과 현재 탭에서 동시에 확인 가능합니다.`);
-                loadCurrentTabData();
+                alert(`✅ 복구 완료! '상담' 탭과 현재 이력 탭에서 동시에 확인 가능합니다.`);
+                loadCurrentTabData(); // 데이터 새로고침
 
             } catch (e) {
                 console.error(e);
@@ -4529,6 +4537,7 @@ function AdminDashboard({ user, onLogout }) {
                                                             onBlur={(e) => e.target.style.height = '2rem'}
                                                             onInput={autoResizeTextarea}
                                                             onDoubleClick={() => handleOpenHistory(c)}
+                                                            onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)}
                                                             placeholder="메모..."
                                                         />
                                                         <button
@@ -4837,6 +4846,7 @@ function AdminDashboard({ user, onLogout }) {
                                                             }}
                                                             onBlur={(e) => e.target.style.height = '2rem'}
                                                             onInput={autoResizeTextarea}
+                                                            onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)}
                                                             onDoubleClick={() => handleOpenHistory(c)}
                                                             placeholder="메모..."
                                                         />
@@ -5293,20 +5303,11 @@ function AdminDashboard({ user, onLogout }) {
                                 </div>
                             </div>
 
-                            {/* 🟢 [수정됨] 접수관리 테이블: 상담관리와 동일한 디자인/사이즈 + 메모 버튼 상시 노출 */}
                             <div className="flex-1 overflow-auto border border-gray-200 rounded-xl shadow-sm bg-white mt-1" style={{ maxHeight: 'calc(100vh - 280px)' }}>
                                 <table className="sheet-table w-full text-left">
-                                    {/* 헤더 */}
+                                    {/* 1. 헤더: 요청하신 순서로 재배치 (11개 컬럼) */}
                                     <thead className="bg-slate-100 text-slate-500 font-bold uppercase text-[11px] tracking-tight border-b border-slate-200 sticky top-0 z-10">
                                         <tr>
-                                            <th className="px-3 py-2 w-10 text-center border-r border-slate-200">
-                                                <input
-                                                    type="checkbox"
-                                                    className="accent-indigo-600 cursor-pointer w-3.5 h-3.5"
-                                                    onChange={(e) => handleSelectAll(e, displayedData)}
-                                                    checked={displayedData.length > 0 && selectedIds.length === displayedData.length}
-                                                />
-                                            </th>
                                             <th className="px-3 py-2 w-20 text-right bg-indigo-50 text-indigo-700 border-r border-slate-200">순수익</th>
                                             <th className="px-3 py-2 w-24 border-r border-slate-200">플랫폼</th>
                                             <th className="px-3 py-2 w-24 border-r border-slate-200">접수일</th>
@@ -5315,36 +5316,18 @@ function AdminDashboard({ user, onLogout }) {
                                             <th className="px-3 py-2 w-32 border-r border-slate-200">연락처</th>
                                             <th className="px-3 py-2 w-16 text-center border-r border-slate-200">정책(만)</th>
                                             <th className="px-3 py-2 w-16 text-center border-r border-slate-200">지원(만)</th>
-                                            <th className="px-3 py-2 w-12 text-center border-r border-slate-200">체크</th>
+                                            <th className="px-3 py-2 w-12 text-center border-r border-slate-200 bg-emerald-50 text-emerald-700">체크</th>
                                             <th className="px-3 py-2 w-32 text-center border-r border-slate-200">상태</th>
                                             <th className="px-3 py-2 min-w-[250px]">후처리 메모 (누락방지)</th>
                                         </tr>
                                     </thead>
 
-                                    {/* 바디 */}
+                                    {/* 2. 바디: 헤더와 동일한 순서로 데이터 출력 (11개 컬럼) */}
                                     <tbody className="divide-y divide-gray-100 text-xs text-gray-700">
                                         {displayedData.map(c => {
                                             const checklistItems = parseChecklist(c.checklist);
                                             const isPostProcessed = checklistItems.includes('후처리완료');
-
-                                            const agentPolicy = safeParseInt(c.agent_policy);
-                                            const supportAmt = safeParseInt(c.support_amt);
-                                            const netProfit = agentPolicy - supportAmt; // '만' 단위
-                                            const isRefunded = checklistItems.includes('환수완료');
-
-                                            // 매출 계산 (해지 고려)
-                                            let displayRevenue = netProfit * 10000;
-                                            if (c.status === '해지진행') {
-                                                if (c.installed_date) {
-                                                    const installDate = new Date(c.installed_date);
-                                                    const today = new Date();
-                                                    const isSameMonth = installDate.getFullYear() === today.getFullYear() && installDate.getMonth() === today.getMonth();
-                                                    if (isSameMonth) displayRevenue = 0;
-                                                    else displayRevenue = -Math.abs(displayRevenue);
-                                                } else {
-                                                    displayRevenue = 0;
-                                                }
-                                            }
+                                            const netProfit = safeParseInt(c.agent_policy) - safeParseInt(c.support_amt);
 
                                             const togglePostProcess = (e) => {
                                                 e.stopPropagation();
@@ -5354,98 +5337,61 @@ function AdminDashboard({ user, onLogout }) {
                                                 handleInlineUpdate(c.id, 'checklist', newList.join(','));
                                             };
 
-                                            const toggleRefundStatus = () => {
-                                                const newChecklist = isRefunded
-                                                    ? checklistItems.filter(item => item !== '환수완료')
-                                                    : [...checklistItems, '환수완료'];
-                                                handleInlineUpdate(c.id, 'checklist', newChecklist.join(','));
-                                            };
-
                                             return (
-                                                <tr key={c.id} className={`hover:bg-indigo-50/30 transition-colors group ${isPostProcessed ? 'bg-gray-50' : ''}`}>
-
-                                                    {/* 0. 체크박스 */}
-                                                    <td className="px-3 py-2.5 text-center border-r border-slate-100">
-                                                        <input
-                                                            type="checkbox"
-                                                            className="accent-indigo-600 cursor-pointer w-3.5 h-3.5"
-                                                            checked={selectedIds.includes(c.id)}
-                                                            onChange={() => handleCheck(c.id)}
-                                                        />
-                                                    </td>
-
+                                                <tr
+                                                    key={c.id}
+                                                    className={`transition-all duration-200 group ${isPostProcessed
+                                                        ? 'bg-slate-300 text-gray-600' // ✅ 체크 시 확실히 어두운 회색 강조
+                                                        : 'bg-white hover:bg-indigo-50/30'
+                                                        }`}
+                                                >
                                                     {/* 1. 순수익 */}
-                                                    <td className={`px-3 py-2.5 text-right font-black border-r border-slate-100 ${displayRevenue >= 0 ? 'text-blue-600' : 'text-red-500'}`}>
+                                                    <td className={`px-3 py-2.5 text-right font-black border-r border-slate-100 ${isPostProcessed ? 'text-gray-500' : (netProfit >= 0 ? 'text-blue-600' : 'text-red-500')}`}>
                                                         {netProfit}만
                                                     </td>
 
                                                     {/* 2. 플랫폼 */}
-                                                    <td className="px-3 py-2.5 border-r border-slate-100">
-                                                        <select
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 rounded text-xs font-bold text-gray-600 outline-none cursor-pointer w-full py-0.5"
-                                                            value={c.platform}
-                                                            onChange={(e) => handleInlineUpdate(c.id, 'platform', e.target.value)}
-                                                        >
-                                                            {platformList.map(p => <option key={p} value={p}>{p}</option>)}
-                                                        </select>
-                                                    </td>
+                                                    <td className="px-3 py-2.5 border-r border-slate-100 font-bold">{c.platform}</td>
 
                                                     {/* 3. 접수일 */}
-                                                    <td className="px-3 py-2.5 text-gray-500 text-[11px] font-mono border-r border-slate-100 whitespace-nowrap">
-                                                        {c.upload_date?.substring(2, 10)}
-                                                    </td>
+                                                    <td className="px-3 py-2.5 text-gray-400 border-r border-slate-100">{c.upload_date?.substring(2, 10)}</td>
 
-                                                    {/* 4. 설치일 */}
+                                                    {/* 4. 설치일 (달력 선택 가능하도록 수정) */}
                                                     <td className="px-3 py-2.5 border-r border-slate-100">
                                                         <input
                                                             type="date"
-                                                            className="bg-transparent text-gray-800 font-bold text-[11px] outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 cursor-pointer w-24 py-0.5"
+                                                            className="bg-transparent text-gray-800 font-bold outline-none w-full cursor-pointer hover:text-indigo-600 transition-colors"
                                                             value={c.installed_date || ''}
-                                                            onClick={(e) => e.target.showPicker()}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation(); // 드래그 방지
+                                                                e.target.showPicker(); // 클릭 시 달력 자동 팝업
+                                                            }}
                                                             onChange={(e) => handleInlineUpdate(c.id, 'installed_date', e.target.value)}
                                                         />
                                                     </td>
 
                                                     {/* 5. 고객명 */}
-                                                    <td className="px-3 py-2.5 border-r border-slate-100">
-                                                        <input
-                                                            type="text"
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 outline-none w-full font-bold text-gray-800 transition py-0.5"
-                                                            defaultValue={c.name}
-                                                            onBlur={(e) => handleInlineUpdate(c.id, 'name', e.target.value)}
-                                                        />
-                                                    </td>
+                                                    <td className="px-3 py-2.5 border-r border-slate-100 font-bold">{c.name}</td>
 
                                                     {/* 6. 연락처 */}
-                                                    <td className="px-3 py-2.5 border-r border-slate-100">
-                                                        <input
-                                                            type="text"
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 outline-none w-full text-gray-600 font-mono tracking-tight transition py-0.5"
-                                                            defaultValue={c.phone}
-                                                            onBlur={(e) => handleInlineUpdate(c.id, 'phone', e.target.value)}
-                                                        />
-                                                        <div className="mt-1">
-                                                            <button onClick={(e) => handleOpenChat(e, c)} className="text-[10px] bg-white border border-gray-200 text-indigo-600 px-1.5 py-0.5 rounded hover:bg-indigo-50 transition flex items-center gap-1 w-fit">
-                                                                <span>💬</span> SMS
-                                                            </button>
+                                                    <td className="px-3 py-2.5 border-r border-slate-100 font-mono">
+                                                        <div className="flex flex-col">
+                                                            <span>{c.phone}</span>
+                                                            <button onClick={(e) => handleOpenChat(e, c)} className="text-[10px] text-indigo-500 hover:underline w-fit font-bold">💬 SMS</button>
                                                         </div>
                                                     </td>
 
                                                     {/* 7. 정책 */}
-                                                    <td className="px-3 py-2.5 text-center border-r border-slate-100">
-                                                        <input type="number" className="w-10 text-center bg-transparent text-xs font-bold text-indigo-600 outline-none border-b border-transparent hover:border-indigo-300 focus:border-indigo-500 no-spin py-0.5" defaultValue={c.agent_policy} onBlur={(e) => handleInlineUpdate(c.id, 'agent_policy', e.target.value)} />
-                                                    </td>
+                                                    <td className="px-3 py-2.5 text-center border-r border-slate-100">{c.agent_policy}</td>
 
-                                                    {/* 8. 지원금 */}
-                                                    <td className="px-3 py-2.5 text-center border-r border-slate-100">
-                                                        <input type="number" className="w-10 text-center bg-transparent text-xs font-bold text-red-500 outline-none border-b border-transparent hover:border-red-300 focus:border-red-500 no-spin py-0.5" defaultValue={c.support_amt} onBlur={(e) => handleInlineUpdate(c.id, 'support_amt', e.target.value)} />
-                                                    </td>
+                                                    {/* 8. 지원 */}
+                                                    <td className="px-3 py-2.5 text-center border-r border-slate-100">{c.support_amt}</td>
 
-                                                    {/* 9. 후처리 체크 */}
+                                                    {/* 9. 체크 (후처리완료) */}
                                                     <td className="px-3 py-2.5 text-center border-r border-slate-100">
                                                         <input
                                                             type="checkbox"
-                                                            className="w-4 h-4 accent-green-600 cursor-pointer"
+                                                            className="w-5 h-5 accent-indigo-600 cursor-pointer"
                                                             checked={isPostProcessed}
                                                             onChange={togglePostProcess}
                                                         />
@@ -5453,72 +5399,37 @@ function AdminDashboard({ user, onLogout }) {
 
                                                     {/* 10. 상태 */}
                                                     <td className="px-3 py-2.5 border-r border-slate-100">
-                                                        <div className="flex flex-col gap-1.5 w-full">
-                                                            <div className="relative w-full">
-                                                                <select
-                                                                    className={`w-full py-1.5 pl-2 pr-6 rounded-lg text-[11px] font-bold outline-none border cursor-pointer appearance-none text-center transition-colors ${getBadgeStyle(c.status)}`}
-                                                                    value={c.status}
-                                                                    onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}
-                                                                >
-                                                                    {receptionList.map(status => (
-                                                                        <option key={status} value={status} className="bg-white text-gray-700">
-                                                                            {status === '접수완료' ? '📝 접수완료' :
-                                                                                status === '설치완료' ? '✅ 설치완료' :
-                                                                                    status === '해지진행' ? '⚠️ 해지진행' : status}
-                                                                        </option>
-                                                                    ))}
-                                                                    <optgroup label="데이터 이동">
-                                                                        <option value="가망등록">⚡ 가망등록 (복사)</option>
-                                                                    </optgroup>
-                                                                </select>
-                                                                <div className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center px-1 text-gray-500 opacity-60">
-                                                                    <svg className="fill-current h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" /></svg>
-                                                                </div>
-                                                            </div>
-                                                            {c.status === '해지진행' && (
-                                                                <button
-                                                                    onClick={toggleRefundStatus}
-                                                                    className={`w-full py-0.5 rounded text-[10px] font-bold border transition ${isRefunded ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-red-100 text-red-600 border-red-200 animate-pulse'}`}
-                                                                >
-                                                                    {isRefunded ? '✅ 환수완료' : '🚨 미환수'}
-                                                                </button>
-                                                            )}
-                                                        </div>
+                                                        <select
+                                                            className={`w-full py-1 rounded text-[10px] font-bold border outline-none ${getBadgeStyle(c.status)}`}
+                                                            value={c.status}
+                                                            onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}
+                                                        >
+                                                            {receptionList.map(status => <option key={status} value={status}>{status}</option>)}
+                                                        </select>
                                                     </td>
 
+                                                    {/* 11. 메모 */}
                                                     <td className="px-3 py-2.5 align-top">
-                                                        <div className="flex items-start gap-2 w-full group relative">
+                                                        <div className="flex items-start gap-2">
                                                             <textarea
-                                                                className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 text-[12px] overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap"
+                                                                className={`flex-1 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded p-1 text-[11px] outline-none resize-none transition-all ${isPostProcessed ? 'text-gray-500' : 'text-gray-700'}`}
                                                                 rows={1}
-                                                                /* ⭐️ 중요: 화면에는 내가 쓴 메모만 보여줌 */
                                                                 value={extractUserMemo(c.last_memo)}
+                                                                onInput={autoResizeTextarea}
                                                                 onChange={(e) => {
-                                                                    // 실시간 타이핑 가능하게 처리
-                                                                    const newNote = e.target.value;
-                                                                    const systemPart = extractSystemForm(c.last_memo);
-                                                                    // 저장 시에는 메모 + 기존 양식을 합쳐서 보냄
-                                                                    const merged = newNote + (systemPart ? "\n\n" + systemPart : "");
+                                                                    const merged = e.target.value + "\n\n" + extractSystemForm(c.last_memo);
                                                                     handleInlineUpdate(c.id, 'last_memo', merged);
                                                                 }}
-                                                                onBlur={(e) => e.target.style.height = '2rem'}
-                                                                onInput={autoResizeTextarea}
-                                                                onDoubleClick={() => handleOpenHistory(c)}
-                                                                placeholder="메모..."
+                                                                onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)}
                                                             />
-                                                            <button
-                                                                onClick={() => openActionMemo(c)}
-                                                                className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm"
-                                                            >
-                                                                📝
-                                                            </button>
+                                                            <button onClick={() => openActionMemo(c)} className={`shrink-0 p-1 rounded border transition-colors ${isPostProcessed ? 'bg-gray-200 text-gray-400' : 'bg-gray-50 hover:bg-indigo-600 hover:text-white'}`}>📝</button>
                                                         </div>
                                                     </td>
                                                 </tr>
                                             );
                                         })}
                                         {displayedData.length === 0 && (
-                                            <tr><td colSpan="12" className="p-20 text-center text-gray-400">접수된 데이터가 없습니다.</td></tr>
+                                            <tr><td colSpan="11" className="p-20 text-center text-gray-400">데이터가 없습니다.</td></tr>
                                         )}
                                     </tbody>
                                 </table>
@@ -5692,6 +5603,7 @@ function AdminDashboard({ user, onLogout }) {
                                                                 onInput={autoResizeTextarea}
                                                                 onDoubleClick={() => handleOpenHistory(c)}
                                                                 placeholder="메모..."
+                                                                onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)}
                                                             />
                                                             <button
                                                                 onClick={() => openActionMemo(c)}
@@ -5909,6 +5821,7 @@ function AdminDashboard({ user, onLogout }) {
                                                                     }}
                                                                     onInput={autoResizeTextarea}
                                                                     onDoubleClick={() => handleOpenHistory(c)}
+                                                                    onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)}
                                                                     placeholder="정산 비고..."
                                                                 />
 
@@ -7453,29 +7366,38 @@ function AdminDashboard({ user, onLogout }) {
             )}
 
 
+            {/* 🟢 [수정됨] 상세 메모 및 퀵 액션: 독립된 팝업 윈도우로 변경 */}
             {showActionMemo && actionMemoTarget && (
-                <div className="fixed inset-0 bg-black/60 z-[10000] flex justify-center items-center backdrop-blur-sm animate-fade-in">
-                    <div className="bg-white rounded-3xl w-[1000px] max-h-[85vh] shadow-2xl border border-gray-200 flex flex-col overflow-hidden">
-
+                <PopoutWindow
+                    title={`📝 기록 관리 - ${actionMemoTarget.name}`}
+                    onClose={() => setShowActionMemo(false)}
+                    width={1000}
+                    height={700}
+                    windowKey="admin_action_memo_window"
+                    trigger={actionMemoTrigger}
+                >
+                    <div className="flex flex-col h-screen bg-slate-100 font-sans overflow-hidden">
                         {/* 상단 헤더 */}
-                        <div className="bg-slate-50 px-6 py-4 border-b border-gray-200 flex justify-between items-center shrink-0">
+                        <div className="bg-indigo-900 px-6 py-4 flex justify-between items-center text-white shrink-0 shadow-lg">
                             <div>
-                                <h3 className="text-lg font-black text-indigo-900 flex items-center gap-2">
+                                <h3 className="text-lg font-black flex items-center gap-2">
                                     <span>📝 상세 기록 및 업무 관리</span>
-                                    <span className="text-sm font-bold text-gray-400 ml-2">| {actionMemoTarget.name} ({actionMemoTarget.phone})</span>
+                                    <span className="text-sm font-bold text-indigo-300 ml-2">| {actionMemoTarget.name} ({actionMemoTarget.phone})</span>
                                 </h3>
                             </div>
-                            <button onClick={() => setShowActionMemo(false)} className="text-gray-400 hover:text-red-500 text-3xl font-light">×</button>
+                            <div className="text-[11px] font-bold bg-white/10 px-3 py-1.5 rounded-full border border-white/10">
+                                독립 업무 모드
+                            </div>
                         </div>
 
-                        {/* 메인 컨텐츠: 좌우 2단 레이아웃 */}
-                        <div className="flex flex-1 overflow-hidden p-6 gap-6 bg-white">
+                        {/* 메인 컨텐츠 */}
+                        <div className="flex flex-1 overflow-hidden p-6 gap-6">
 
-                            {/* [LEFT] 자유 메모 및 기능 영역 (60% 비중) */}
-                            <div className="flex-[1.2] flex flex-col min-w-0">
+                            {/* [LEFT] 메모 작성 및 저장 기능 */}
+                            <div className="flex-[1.2] flex flex-col min-w-0 bg-white rounded-3xl border border-gray-200 shadow-sm p-6">
                                 <label className="text-[11px] font-black text-indigo-500 uppercase tracking-wider mb-2">✍️ 상담 메모 작성/수정</label>
                                 <textarea
-                                    className="flex-1 w-full p-4 bg-slate-50 border border-gray-200 rounded-2xl text-sm leading-relaxed outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-500 focus:bg-white transition-all resize-none shadow-inner mb-4"
+                                    className="flex-1 w-full p-4 bg-slate-50 border border-gray-200 rounded-2xl text-sm leading-relaxed outline-none focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 focus:bg-white transition-all resize-none shadow-inner mb-6"
                                     placeholder="상담 내용을 입력하세요..."
                                     value={extractUserMemo(actionMemoText)}
                                     onChange={(e) => {
@@ -7484,19 +7406,17 @@ function AdminDashboard({ user, onLogout }) {
                                     }}
                                 />
 
-                                {/* 기능 버튼군 */}
-                                <div className="grid grid-cols-3 gap-2 mb-4">
-                                    <button onClick={handleActionSaveMemoOnly} className="py-3 bg-indigo-600 text-white rounded-xl font-bold text-xs shadow-md hover:bg-indigo-700 transition active:scale-95">💾 메모 저장</button>
-                                    <button onClick={handleActionMoveToTodo} className="py-3 bg-blue-50 text-blue-700 border border-blue-200 rounded-xl font-bold text-xs hover:bg-blue-100 transition">📋 TO-DO 등록</button>
-                                    <button onClick={handleActionMoveToNotepad} className="py-3 bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-xl font-bold text-xs hover:bg-yellow-100 transition">📒 개인노트</button>
+                                <div className="grid grid-cols-3 gap-3 mb-6">
+                                    <button onClick={handleActionSaveMemoOnly} className="py-4 bg-indigo-600 text-white rounded-2xl font-black text-sm shadow-lg hover:bg-indigo-700 transition transform active:scale-95">💾 메모 저장</button>
+                                    <button onClick={handleActionMoveToTodo} className="py-4 bg-blue-50 text-blue-700 border border-blue-200 rounded-2xl font-bold text-sm hover:bg-blue-100 transition">📋 TO-DO 등록</button>
+                                    <button onClick={handleActionMoveToNotepad} className="py-4 bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-2xl font-bold text-sm hover:bg-yellow-100 transition">📒 개인노트</button>
                                 </div>
 
-                                {/* 관리자 업무 전달 (하단 배치) */}
-                                <div className="pt-4 border-t border-gray-100">
+                                <div className="pt-6 border-t border-gray-100">
                                     <label className="block text-[11px] font-black text-red-500 mb-2 uppercase">📢 담당 상담원 업무 전달</label>
-                                    <div className="flex gap-2 bg-red-50/50 p-2 rounded-2xl border border-red-100">
+                                    <div className="flex gap-2 bg-red-50 p-2 rounded-2xl border border-red-100">
                                         <select
-                                            className="flex-1 p-2 bg-white border border-gray-300 rounded-xl text-xs font-bold outline-none focus:border-red-500"
+                                            className="flex-1 p-3 bg-white border border-red-200 rounded-xl text-sm font-bold outline-none focus:border-red-500"
                                             value={targetAssignAgent}
                                             onChange={(e) => setTargetAssignAgent(e.target.value)}
                                         >
@@ -7506,21 +7426,18 @@ function AdminDashboard({ user, onLogout }) {
                                         </select>
                                         <button
                                             onClick={handleActionAssignToAgent}
-                                            className="bg-red-500 text-white px-5 rounded-xl font-black text-xs hover:bg-red-600 transition shadow-sm active:scale-95"
+                                            className="bg-red-500 text-white px-8 rounded-xl font-black text-sm hover:bg-red-600 transition shadow-md active:scale-95"
                                         >
-                                            전달
+                                            지시 전달
                                         </button>
                                     </div>
                                 </div>
                             </div>
 
-                            {/* [RIGHT] 접수 양식 뷰어 (40% 비중) */}
-                            <div className="flex-1 flex flex-col min-w-0">
+                            {/* [RIGHT] 접수 양식 뷰어 */}
+                            <div className="flex-1 flex flex-col min-w-0 bg-white rounded-3xl border border-gray-200 shadow-sm p-6">
                                 <label className="text-[11px] font-black text-emerald-600 uppercase tracking-wider mb-2">📄 등록된 접수 양식</label>
-                                <div className={`flex-1 rounded-2xl border-2 border-dashed flex flex-col overflow-hidden transition-all ${extractSystemForm(actionMemoTarget.last_memo)
-                                        ? 'border-emerald-200 bg-emerald-50/20'
-                                        : 'border-gray-200 bg-gray-50 items-center justify-center'
-                                    }`}>
+                                <div className={`flex-1 rounded-2xl border-2 border-dashed flex flex-col overflow-hidden transition-all ${extractSystemForm(actionMemoTarget.last_memo) ? 'border-emerald-200 bg-emerald-50/10' : 'border-gray-200 bg-gray-50 items-center justify-center'}`}>
                                     {extractSystemForm(actionMemoTarget.last_memo) ? (
                                         <div className="flex flex-col h-full">
                                             <div className="p-5 flex-1 overflow-y-auto text-[13px] font-mono leading-relaxed text-gray-700 whitespace-pre-wrap select-all custom-scrollbar">
@@ -7529,31 +7446,29 @@ function AdminDashboard({ user, onLogout }) {
                                             <button
                                                 onClick={() => {
                                                     navigator.clipboard.writeText(extractSystemForm(actionMemoTarget.last_memo));
-                                                    alert("양식이 클립보드에 복사되었습니다.");
+                                                    alert("양식이 복사되었습니다.");
                                                 }}
-                                                className="m-4 py-3 bg-emerald-600 text-white rounded-xl font-black text-xs hover:bg-emerald-700 transition shadow-lg shadow-emerald-100"
+                                                className="m-4 py-4 bg-emerald-600 text-white rounded-2xl font-black text-sm hover:bg-emerald-700 transition shadow-lg"
                                             >
-                                                📋 양식 전체 복사하기
+                                                📋 양식 전체 복사
                                             </button>
                                         </div>
                                     ) : (
-                                        <div className="text-center p-10 flex flex-col items-center">
-                                            <span className="text-5xl mb-4 opacity-10">📭</span>
-                                            <p className="text-gray-400 text-sm font-bold">생성된 접수 내역이 없습니다.</p>
-                                            <p className="text-[11px] text-gray-300 mt-1">접수 완료 시 이곳에 정보가 노출됩니다.</p>
+                                        <div className="text-center p-10">
+                                            <span className="text-5xl mb-4 block opacity-10">📭</span>
+                                            <p className="text-gray-400 text-sm font-bold">등록된 접수 내역 없음</p>
                                         </div>
                                     )}
                                 </div>
                             </div>
-
                         </div>
 
-                        {/* 하단 안내바 */}
-                        <div className="bg-slate-50 px-6 py-2 border-t text-[10px] text-gray-400 font-medium text-center">
-                            ※ 왼쪽 메모장에서 내용을 수정하고 '메모 저장'을 누르면 접수 양식과 함께 통합 저장됩니다.
+                        {/* 하단 바 */}
+                        <div className="bg-white px-6 py-3 border-t text-[11px] text-gray-400 font-bold text-center">
+                            ※ 이 창은 별도의 독립된 윈도우입니다. 메인 화면을 조작하면서 동시에 메모를 작성할 수 있습니다.
                         </div>
                     </div>
-                </div>
+                </PopoutWindow>
             )}
 
             {showMobileModal && (

@@ -4,7 +4,7 @@ import ReactDOM from 'react-dom';
 // ==================================================================================
 // 1. 상수 및 설정값
 // ==================================================================================
-const API_BASE = "https://panda-1-hd18.onrender.com";
+const API_BASE = "http://127.0.0.1:8000";
 
 // ⭐️ 화면 렌더링용 상수
 const TIME_OPTIONS = [9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19];
@@ -574,13 +574,12 @@ function AgentDashboard({ user, onLogout }) {
         setWorkMemos(prev => prev.map(m => m.id === id ? { ...m, [field]: value } : m));
     };
 
-
-
     const [showCompletionModal, setShowCompletionModal] = useState(false);
     const [completionTarget, setCompletionTarget] = useState(null);
     const [selectedPlatform, setSelectedPlatform] = useState('KT');
     const [dynamicFormData, setDynamicFormData] = useState({});
     const [calculatedPolicy, setCalculatedPolicy] = useState(0);
+
 
     const [newAdChannel, setNewAdChannel] = useState({ name: '', cost: '' });
     const [newReason, setNewReason] = useState('');
@@ -604,20 +603,20 @@ function AgentDashboard({ user, onLogout }) {
     // 🟢 [추가] 정책뷰어 이미지 확대 보기 상태 (이미지 URL)
     const [zoomImg, setZoomImg] = useState(null);
 
-    
+    const [actionMemoTrigger, setActionMemoTrigger] = useState(0);
+    // openActionMemo 함수 수정
 
- 
 
+    // 1. 상태 추가
+    const [zoomScale, setZoomScale] = useState(1); // 확대 배율
+    const [policyDeleteTarget, setPolicyDeleteTarget] = useState(null); // 삭제 대상
 
-    // 🟢 [신규] 거래처 삭제 핸들러 (이름으로 삭제 가정, 실제론 ID로 하는게 좋음)
-    const handleDeleteClient = (clientName) => {
-        if (!window.confirm(`'${clientName}' 거래처를 삭제하시겠습니까?`)) return;
-
-        // 편의상 리스트에서 이름에 해당하는 ID를 찾아 삭제 요청하는 로직 필요
-        // 여기서는 UI 갱신 예시만 보여드림
-        // 실제 구현: id 찾아서 DELETE /api/clients/{id}/
-        alert("삭제 기능은 백엔드 ID 매핑이 필요합니다.");
+    // 2. 삭제 함수 추가
+    const handleDeleteServerImage = (imgObj) => {
+        if (!imgObj.id) return alert("이미지 ID를 찾을 수 없습니다.");
+        setPolicyDeleteTarget(imgObj); // 삭제 확인 모달용
     };
+
 
     // 🟢 [수정됨] 접수 취소 확정 핸들러 (UI 입력값 기반)
     const handleConfirmCancel = async () => {
@@ -779,13 +778,12 @@ function AgentDashboard({ user, onLogout }) {
     const [memoPopupText, setMemoPopupText] = useState('');
     const [memoFieldType, setMemoFieldType] = useState('');
     const [isTopStatsVisible, setIsTopStatsVisible] = useState(false);
+    const [chatTrigger, setChatTrigger] = useState(0);
 
     const [newNotice, setNewNotice] = useState({ title: '', content: '', is_important: false });
     const [uploadImage, setUploadImage] = useState(null);
     const [isBannerVisible, setIsBannerVisible] = useState(true);
 
-    // 상태 선언부
-    const [policyDeleteTarget, setPolicyDeleteTarget] = useState(null);
 
     const [showFailModal, setShowFailModal] = useState(false);
     const [failTarget, setFailTarget] = useState(null);
@@ -814,6 +812,20 @@ function AgentDashboard({ user, onLogout }) {
     const [showHistoryModal, setShowHistoryModal] = useState(false); // 히스토리 팝업 표시 여부
     const [historyData, setHistoryData] = useState([]); // 불러온 히스토리 데이터
     const [historyTargetName, setHistoryTargetName] = useState(''); // 히스토리 대상 고객명
+    const [highlightedId, setHighlightedId] = useState(null);
+
+    // 1. 순수 상담 메모만 추출 (테이블 표시용)
+    const extractUserMemo = (text) => {
+        if (!text) return "";
+        return text.split("■ 고객정보")[0].trim();
+    };
+
+    // 2. 시스템 접수 양식만 추출 (퀵버튼 모달용)
+    const extractSystemForm = (text) => {
+        if (!text || !text.includes("■ 고객정보")) return "";
+        const startIndex = text.indexOf("■ 고객정보");
+        return text.substring(startIndex).trim();
+    };
 
     const [clientTemplates, setClientTemplates] = useState(() => {
         const saved = localStorage.getItem('admin_client_templates');
@@ -821,18 +833,14 @@ function AgentDashboard({ user, onLogout }) {
         // 예: { "농심본사": "■ 고객정보\n성명: {{NAME}}\n..." }
     });
 
+
     // 👇 [여기에 추가] 🟢 퀵 액션 메모용 State 및 핸들러 👇
     const [showActionMemo, setShowActionMemo] = useState(false);
     const [actionMemoTarget, setActionMemoTarget] = useState(null);
     const [actionMemoText, setActionMemoText] = useState('');
     const [targetAssignAgent, setTargetAssignAgent] = useState('');
 
-    const openActionMemo = (customer) => {
-        setActionMemoTarget(customer);
-        setActionMemoText(activeTab === 'settlement' ? (customer.settlement_memo || '') : (customer.last_memo || ''));
-        setTargetAssignAgent('');
-        setShowActionMemo(true);
-    };
+
 
     const handleActionSaveMemoOnly = async () => {
         if (!actionMemoTarget) return;
@@ -840,6 +848,38 @@ function AgentDashboard({ user, onLogout }) {
         await handleInlineUpdate(actionMemoTarget.id, memoField, actionMemoText);
         alert("✅ 메모가 저장되었습니다.");
         setShowActionMemo(false);
+    };
+
+
+
+
+    // 🔔 [수정] 알림 클릭 시 처리 로직
+    const handleNotificationClick = async (customer) => {
+        // 1. '알림ON' 끄기 (체크리스트 업데이트)
+        const currentList = parseChecklist(customer.checklist);
+        const newList = currentList.filter(item => item !== '알림ON');
+        await handleInlineUpdate(customer.id, 'checklist', newList.join(','));
+
+        // 2. 고객 상태에 따라 적절한 탭으로 이동
+        if (['가망', '장기가망', '접수완료'].includes(customer.status)) {
+            setActiveTab('long_term');
+        } else {
+            setActiveTab('consult');
+        }
+
+        // 3. 해당 행 강조 및 자동 스크롤
+        setHighlightedId(customer.id);
+        setShowNotiDropdown(false); // 드롭다운 닫기
+
+        setTimeout(() => {
+            const row = document.getElementById(`row-${customer.id}`);
+            if (row) {
+                row.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }, 300); // 탭 전환 애니메이션 대기
+
+        // 4. 3초 후 강조 효과 제거
+        setTimeout(() => setHighlightedId(null), 3000);
     };
 
     const handleActionMoveToTodo = () => {
@@ -867,6 +907,14 @@ function AgentDashboard({ user, onLogout }) {
         setWorkMemos(prev => [...prev, newMemo]);
         alert("✅ 메모장(새 탭)에 추가되었습니다.");
         setShowActionMemo(false);
+    };
+
+    const openActionMemo = (customer) => {
+        setActionMemoTarget(customer);
+        setActionMemoText(activeTab === 'settlement' ? (customer.settlement_memo || '') : (customer.last_memo || ''));
+        setTargetAssignAgent('');
+        setShowActionMemo(true);
+        setActionMemoTrigger(Date.now()); // ⭐️ 새로운 창을 띄우거나 기존 창을 앞으로 가져오는 트리거
     };
 
     const handleActionAssignToAgent = async () => {
@@ -1414,8 +1462,8 @@ function AgentDashboard({ user, onLogout }) {
 
 
     const handleExecuteMobileTest = async () => {
-        if (!smsConfig.username || !smsConfig.password || !testPhoneNumber) {
-            return alert("기기 정보와 테스트할 핸드폰 번호를 모두 입력해주세요.");
+        if (!smsConfig.token || !testPhoneNumber) {
+            return alert("기기 토큰과 테스트할 핸드폰 번호를 입력해주세요.");
         }
 
         try {
@@ -1424,13 +1472,13 @@ function AgentDashboard({ user, onLogout }) {
                 headers: getAuthHeaders(),
                 body: JSON.stringify({
                     phone: testPhoneNumber.replace(/[^0-9]/g, ''),
-                    gateway_config: smsConfig
+                    token: smsConfig.token // 백엔드에서 url은 고정 처리됨
                 })
             });
 
             const data = await res.json();
             if (res.ok) {
-                alert("🚀 테스트 신호 발송 성공!\n입력하신 번호로 문자가 오는지 확인하세요.");
+                alert("🚀 테스트 신호 발송 성공!\n핸드폰의 Traccar 앱 로그와 실제 문자를 확인하세요.");
             } else {
                 alert(`❌ 연동 실패: ${data.message}`);
             }
@@ -1438,6 +1486,7 @@ function AgentDashboard({ user, onLogout }) {
             alert("서버 통신 오류가 발생했습니다.");
         }
     };
+
     // 🟢 [수정] 플랫폼 필터 (platformList State 사용)
     const renderPlatformFilter = () => (
         <div className="flex flex-wrap gap-1 items-center mr-2 bg-gray-100 p-1 rounded-lg border border-gray-200">
@@ -1588,7 +1637,7 @@ function AgentDashboard({ user, onLogout }) {
         setPolicyDeleteTarget(imgObj); // 삭제할 이미지 정보를 상태에 저장
     };
 
-    // 2. 팝업 내 '삭제' 버튼 클릭 시 실제 서버 요청 함수
+    // [삭제 확정 함수]
     const executePolicyDelete = async () => {
         if (!policyDeleteTarget) return;
         try {
@@ -1597,12 +1646,12 @@ function AgentDashboard({ user, onLogout }) {
                 headers: getAuthHeaders()
             });
             if (res.ok) {
-                alert("✅ 삭제되었습니다.");
-                setPolicyDeleteTarget(null); // 팝업 닫기
-                fetchNoticesAndPolicies();    // 리스트 갱신
+                alert("✅ 정책서가 삭제되었습니다.");
+                setPolicyDeleteTarget(null); // 모달 닫기
+                fetchNoticesAndPolicies();   // 목록 새로고침
             }
         } catch (e) {
-            alert("서비 통신 오류");
+            alert("서버 통신 중 오류가 발생했습니다.");
         }
     };
 
@@ -1949,15 +1998,21 @@ function AgentDashboard({ user, onLogout }) {
     }, [displayedData, activeLtFolder, ltAssignments]);
 
 
+    // 🔔 [수정] 실시간 알림 목록 계산 (현재 시간 기준)
     const notifications = useMemo(() => {
         if (!currentUserId) return [];
         const now = new Date().getTime();
+
         return allCustomers.filter(c => {
+            // 1. 내 고객인지 확인
             if (String(c.owner) !== String(currentUserId)) return false;
+            // 2. 일정이 있고, '알림ON' 체크가 되어있는지 확인
             if (!c.callback_schedule) return false;
-            if (['접수완료', '실패', '장기가망', '접수취소', '실패이관'].includes(c.status)) return false;
             const checklist = parseChecklist(c.checklist);
             if (!checklist.includes('알림ON')) return false;
+            // 3. 이미 종료된 상태(실패, 취소 등)는 알림에서 제외
+            if (['실패', '접수취소', '실패이관'].includes(c.status)) return false;
+            // 4. 예정 시간이 현재 시간보다 지났거나 현재인 경우만 표시
             return new Date(c.callback_schedule).getTime() <= now;
         }).sort((a, b) => new Date(a.callback_schedule) - new Date(b.callback_schedule));
     }, [allCustomers, currentUserId]);
@@ -2371,77 +2426,43 @@ function AgentDashboard({ user, onLogout }) {
     // 상태 변경 핸들러
     const handleStatusChangeRequest = async (id, newStatus) => {
 
-
-        // 🟢 [추가됨] 1. 가망등록(복사) 선택 시 로직 (설치완료 탭 전용)
-        // 🟢 [수정됨] 가망등록(복사) 선택 시 로직
+        // handleStatusChangeRequest 함수 내부의 '가망등록' if문 전체 교체
         if (newStatus === '가망등록') {
             const target = allCustomers.find(c => c.id === id);
             if (!target) return;
 
-            if (!window.confirm(`[${target.name}] 님을 '내 가망관리' 탭으로 복사하시겠습니까?\n\n※ 기존 상담 이력을 모두 가져옵니다.`)) {
-                return;
-            }
+            if (!window.confirm(`[${target.name}] 님을 '내 가망관리'로 복사하시겠습니까?\n과거 상담 이력을 모두 통합합니다.`)) return;
 
-            // 1. 기존 상담 이력(로그) 불러오기
-            let combinedHistory = "";
             try {
-                const logRes = await fetch(`${API_BASE}/api/customers/${target.id}/logs/`, {
-                    headers: getAuthHeaders()
-                });
-
+                // 1. 기존 로그(히스토리) API 호출
+                const logRes = await fetch(`${API_BASE}/api/customers/${target.id}/logs/`, { headers: getAuthHeaders() });
+                let combinedHistory = "";
                 if (logRes.ok) {
                     const logs = await logRes.json();
-                    // 로그를 텍스트로 변환 (최신순 or 과거순 정렬 후 합치기)
                     combinedHistory = logs
-                        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at)) // 과거 -> 최신 순
+                        .sort((a, b) => new Date(a.created_at) - new Date(b.created_at))
                         .map(log => `[📅 ${new Date(log.created_at).toLocaleString()} / 👤 ${log.user_name || '시스템'}]\n${log.content}`)
                         .join('\n\n--------------------------------\n\n');
                 }
-            } catch (e) {
-                console.error("히스토리 불러오기 실패", e);
-                combinedHistory = "(히스토리 불러오기 실패)";
-            }
 
-            // 2. 저장할 최종 메모 구성
-            // [현재 메모] + [구분선] + [과거 히스토리 전체] + [시스템 메시지]
-            const systemMsg = `[시스템] 설치완료(ID:${target.id})에서 복사됨 - 이사/해지 후 신규가입 건`;
+                // 2. 현재 메모 + 과거 이력 + 시스템 태그 결합
+                const finalMemo = (target.last_memo ? `[최근 메모]\n${extractUserMemo(target.last_memo)}\n\n` : "") +
+                    `=========== 📜 과거 상담 이력 ===========\n\n` + combinedHistory;
 
-            const finalMemo =
-                (target.last_memo ? `[마지막 메모]\n${target.last_memo}\n\n` : "") +
-                `=========== 📜 과거 상담 이력 (ID:${target.id}) ===========\n\n` +
-                combinedHistory +
-                `\n\n===================================================\n\n` +
-                systemMsg;
-
-            // 3. 데이터 전송
-            const newCustomerPayload = {
-                customers: [{
-                    name: target.name,
-                    phone: target.phone,
-                    platform: target.platform,
-                    owner_id: currentUserId,
-                    status: '장기가망',
-                    upload_date: new Date().toISOString().split('T')[0],
-                    last_memo: finalMemo // ⭐️ 여기에 합친 내용을 넣습니다.
-                }]
-            };
-
-            try {
+                // 3. 신규 데이터로 전송 (복사)
                 const res = await fetch(`${API_BASE}/api/customers/bulk_upload/`, {
                     method: 'POST',
                     headers: getAuthHeaders(),
-                    body: JSON.stringify(newCustomerPayload)
+                    body: JSON.stringify({
+                        customers: [{
+                            name: target.name, phone: target.phone, platform: target.platform,
+                            owner_id: currentUserId, status: '장기가망', last_memo: finalMemo,
+                            upload_date: new Date().toISOString().split('T')[0]
+                        }]
+                    })
                 });
-                if (res.ok) {
-                    alert("✅ 상담 이력과 함께 복사되었습니다.");
-                    // loadCurrentTabData(); // 필요 시 주석 해제
-                } else {
-                    alert("오류가 발생했습니다.");
-                }
-            } catch (err) {
-                console.error(err);
-                alert("서버 통신 오류");
-            }
+                if (res.ok) alert("✅ 히스토리와 함께 가망 리스트로 복사되었습니다.");
+            } catch (e) { alert("복사 중 오류 발생"); }
             return;
         }
 
@@ -2633,76 +2654,60 @@ function AgentDashboard({ user, onLogout }) {
     const backToChatList = () => { setChatView('LIST'); setChatTarget(null); setChatMessages([]); };
     const handleOpenChat = (e, c) => { e.stopPropagation(); e.preventDefault(); setChatTarget(c); setChatView('ROOM'); setChatMessages([]); setIsChatOpen(true); fetchChatHistory(c.id); };
     // 🟢 [수정됨] 텍스트 + 이미지 전송 핸들러
+    // AgentDashboard 내의 handleSendManualChat 수정
+    // handleSendManualChat을 FormData 방식으로 교체
     const handleSendManualChat = async (textToSend = null) => {
         const msg = textToSend || chatInput;
-
-        // 1. 유효성 검사 수정: 텍스트가 없더라도 파일이 있으면 전송 허용
         if ((!msg?.trim() && !chatFile) || !chatTarget) return;
 
         setIsSending(true);
-
         try {
-            // 2. FormData 객체 생성 (파일 전송을 위해 필수)
             const formData = new FormData();
             formData.append('customer_id', chatTarget.id);
-            formData.append('gateway_config', JSON.stringify(smsConfig));
+            formData.append('token', smsConfig.token); // 앱 설정에 따라 password 또는 token 사용
 
-            if (msg?.trim()) {
-                formData.append('message', msg);
-            }
+            if (msg?.trim()) formData.append('message', msg);
+            if (chatFile) formData.append('image', chatFile);
 
-            if (chatFile) {
-                formData.append('image', chatFile); // ⭐️ 파일 추가
-            }
-
-            // 3. 헤더 설정 (FormData 전송 시 Content-Type은 브라우저가 자동 설정해야 함)
             const headers = getAuthHeaders();
-            delete headers['Content-Type']; // 'application/json' 헤더 삭제
+            delete headers['Content-Type']; // ⭐️ 필수: 브라우저가 자동 설정하게 함
 
             const res = await fetch(`${API_BASE}/api/sales/manual-sms/`, {
                 method: 'POST',
-                headers: headers, // Content-Type이 제거된 헤더 사용
-                body: formData    // JSON 문자열 대신 formData 전송
+                headers: headers,
+                body: formData
             });
 
             if (res.ok) {
-                // 4. 성공 시 화면에 즉시 반영 (낙관적 업데이트)
-                const newMsg = {
-                    id: Date.now(),
-                    sender: 'me',
-                    text: msg,
-                    // 방금 보낸 이미지 미리보기 생성
-                    image: chatFile ? URL.createObjectURL(chatFile) : null,
-                    created_at: '방금 전'
-                };
-
-                setChatMessages(prev => [...prev, newMsg]);
-
-                // 입력창 및 파일 초기화
-                if (!textToSend) setChatInput('');
+                setChatInput('');
                 setChatFile(null);
-            } else {
-                alert("전송 실패: 서버 오류가 발생했습니다.");
+                fetchChatHistory(chatTarget.id); // 즉시 갱신
             }
-        } catch (e) {
-            console.error(e);
-            alert("오류가 발생했습니다.");
-        } finally {
-            setIsSending(false);
-        }
+        } catch (e) { console.error(e); }
+        finally { setIsSending(false); }
     };
 
-    // 🟢 채팅방 내부 자동 새로고침(Polling) 추가
+    // useEffect 구역에 채팅 자동 새로고침 추가
     useEffect(() => {
         let interval;
         if (isChatOpen && chatTarget && chatView === 'ROOM') {
-            // 5초마다 대화 내역을 새로 불러옴
+            interval = setInterval(() => fetchChatHistory(chatTarget.id), 5000);
+        }
+        return () => clearInterval(interval);
+    }, [isChatOpen, chatTarget, chatView]);
+
+    // AgentDashboard 내 useEffect들 사이에 추가
+    useEffect(() => {
+        let interval;
+        if (isChatOpen && chatTarget && chatView === 'ROOM') {
+            // 5초마다 대화 내역 리프레시
             interval = setInterval(() => {
                 fetchChatHistory(chatTarget.id);
             }, 5000);
         }
-        return () => clearInterval(interval); // 채팅창 닫으면 중지
+        return () => clearInterval(interval);
     }, [isChatOpen, chatTarget, chatView]);
+
     const renderInteractiveStars = (id, currentRank) => (
         <div className="flex cursor-pointer" onClick={(e) => e.stopPropagation()}>
             {[1, 2, 3, 4, 5].map(star => (
@@ -2852,13 +2857,14 @@ function AgentDashboard({ user, onLogout }) {
                             <span className="text-xl">💬</span>
                         </button>
 
-                        {/* 알림 아이콘 */}
+                        {/* 🔔 헤더 알림 영역 교체 */}
                         <div className="relative">
                             <button
                                 onClick={(e) => { e.stopPropagation(); setShowNotiDropdown(!showNotiDropdown); }}
-                                className={`w-10 h-10 flex items-center justify-center rounded-lg transition relative ${showNotiDropdown ? 'bg-white text-yellow-500 shadow-sm' : 'text-gray-400 hover:bg-white hover:text-yellow-500'}`}
+                                className={`w-10 h-10 flex items-center justify-center rounded-lg transition-all relative ${showNotiDropdown ? 'bg-white text-yellow-500 shadow-sm' : 'text-gray-400 hover:bg-white hover:text-yellow-500'
+                                    }`}
                             >
-                                <span className="text-xl">🔔</span>
+                                <span className="text-xl">{notifications.length > 0 ? '🔔' : '🔕'}</span>
                                 {notifications.length > 0 && (
                                     <span className="absolute top-2 right-2 bg-red-500 text-white text-[9px] font-black px-1.5 rounded-full border-2 border-white animate-pulse">
                                         {notifications.length}
@@ -2866,26 +2872,41 @@ function AgentDashboard({ user, onLogout }) {
                                 )}
                             </button>
 
-                            {/* 알림 드롭다운 (기존 코드 유지) */}
+                            {/* 알림 드롭다운 창 */}
                             {showNotiDropdown && (
                                 <div className="absolute right-0 top-12 w-80 bg-white border border-gray-200 rounded-2xl shadow-2xl overflow-hidden z-50 animate-fade-in-down">
-                                    <div className="bg-indigo-50 p-4 border-b border-gray-200 font-bold flex justify-between text-indigo-900 text-sm">
-                                        <span>⏰ 재통화 알림</span>
-                                        <button className="text-xs text-gray-400" onClick={() => setShowNotiDropdown(false)}>닫기</button>
+                                    <div className="bg-indigo-50 p-4 border-b border-gray-200 font-bold flex justify-between items-center text-indigo-900 text-sm">
+                                        <div className="flex items-center gap-2">
+                                            <span>⏰ 재통화 알림</span>
+                                            <span className="bg-indigo-600 text-white text-[10px] px-2 py-0.5 rounded-full">{notifications.length}</span>
+                                        </div>
+                                        <button className="text-xs text-gray-400 hover:text-gray-600" onClick={() => setShowNotiDropdown(false)}>닫기</button>
                                     </div>
-                                    <div className="max-h-60 overflow-y-auto">
+                                    <div className="max-h-80 overflow-y-auto custom-scrollbar">
                                         {notifications.length === 0 ? (
-                                            <div className="p-8 text-center text-gray-400 text-sm italic">대기중인 알림이 없습니다.</div>
+                                            <div className="p-10 text-center flex flex-col items-center gap-2">
+                                                <span className="text-3xl grayscale opacity-30">🔔</span>
+                                                <p className="text-gray-400 text-xs italic">현재 예정된 재통화 일정이 없습니다.</p>
+                                            </div>
                                         ) : (
                                             notifications.map(n => (
-                                                <div key={n.id} onClick={() => openHistoryModal(n)} className="p-4 border-b border-gray-50 hover:bg-slate-50 cursor-pointer flex justify-between items-center transition">
-                                                    <div>
-                                                        <div className="font-bold text-sm text-gray-800">{n.name}</div>
+                                                <div
+                                                    key={n.id}
+                                                    onClick={() => handleNotificationClick(n)}
+                                                    className="p-4 border-b border-gray-50 hover:bg-indigo-50/50 cursor-pointer flex justify-between items-center transition-colors"
+                                                >
+                                                    <div className="min-w-0">
+                                                        <div className="font-bold text-sm text-gray-800 truncate">{n.name}</div>
                                                         <div className="text-[11px] text-gray-400 font-mono">{n.phone}</div>
+                                                        <div className="text-[10px] text-indigo-500 font-bold mt-1">
+                                                            {new Date(n.callback_schedule).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                                                        </div>
                                                     </div>
-                                                    <div className="text-right">
-                                                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded ${getBadgeStyle(n.status)}`}>{n.status}</span>
-                                                        <div className="text-[10px] text-indigo-500 font-bold mt-1">{formatCallback(n.callback_schedule)}</div>
+                                                    <div className="text-right shrink-0">
+                                                        <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded shadow-sm ${getBadgeStyle(n.status)}`}>
+                                                            {n.status}
+                                                        </span>
+                                                        <div className="text-[10px] text-red-400 font-bold mt-2">지금 연락요망</div>
                                                     </div>
                                                 </div>
                                             ))
@@ -3394,7 +3415,12 @@ function AgentDashboard({ user, onLogout }) {
                                         const isAlarmOn = checklistItems.includes('알림ON');
 
                                         return (
-                                            <tr key={c.id} className="hover:bg-yellow-50/50 transition duration-150 group">
+                                            <tr
+                                                key={c.id}
+                                                id={`row-${c.id}`}
+                                                className={`transition duration-500 group ${c.id === highlightedId ? 'bg-yellow-200 ring-2 ring-yellow-400 z-10' : 'hover:bg-yellow-50/50'
+                                                    }`}
+                                            >
 
                                                 {/* 1. 체크박스 */}
                                                 <td className="px-3 py-2.5 text-center border-r border-slate-100">
@@ -3506,41 +3532,30 @@ function AgentDashboard({ user, onLogout }) {
                                                     </div>
                                                 </td>
 
-                                                {/* 9. 상담 메모 */}
                                                 <td className="px-3 py-2.5 align-top">
-                                                    <div className="relative group w-full h-8">
+                                                    <div className="flex items-start gap-2 w-full group relative">
                                                         <textarea
-                                                            className="absolute top-0 left-0 w-full h-8 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded px-1 pr-9 text-xs transition-all resize-none leading-normal overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5"
+                                                            className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 text-[12px] overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap"
                                                             rows={1}
-                                                            defaultValue={c.last_memo}
-                                                            onBlur={(e) => {
-                                                                e.target.style.height = '2rem'; // h-8
-                                                                handleInlineUpdate(c.id, 'last_memo', e.target.value);
+                                                            /* ⭐️ 중요: 화면에는 내가 쓴 메모만 보여줌 */
+                                                            value={extractUserMemo(c.last_memo)}
+                                                            onChange={(e) => {
+                                                                // 실시간 타이핑 가능하게 처리
+                                                                const newNote = e.target.value;
+                                                                const systemPart = extractSystemForm(c.last_memo);
+                                                                // 저장 시에는 메모 + 기존 양식을 합쳐서 보냄
+                                                                const merged = newNote + (systemPart ? "\n\n" + systemPart : "");
+                                                                handleInlineUpdate(c.id, 'last_memo', merged);
                                                             }}
-                                                            onKeyDown={(e) => {
-                                                                if (e.key === 'Enter' && e.ctrlKey) {
-                                                                    e.preventDefault();
-                                                                    const val = e.target.value;
-                                                                    const start = e.target.selectionStart;
-                                                                    const end = e.target.selectionEnd;
-                                                                    e.target.value = val.substring(0, start) + "\n" + val.substring(end);
-                                                                    e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                                    e.target.style.height = 'auto';
-                                                                    e.target.style.height = e.target.scrollHeight + 'px';
-                                                                    return;
-                                                                }
-                                                                handleMemoKeyDown(e, c.id, c.name);
-                                                            }}
+                                                            onBlur={(e) => e.target.style.height = '2rem'}
+                                                            onInput={autoResizeTextarea}
                                                             onDoubleClick={() => handleOpenHistory(c)}
-                                                            placeholder="메모 입력..."
-                                                            title="더블클릭하여 히스토리 보기"
+                                                            placeholder="메모..."
+                                                            onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)}
                                                         />
-
-                                                        {/* 퀵 액션 버튼: 적당한 크기로 조정 */}
                                                         <button
                                                             onClick={() => openActionMemo(c)}
-                                                            className="absolute right-0 top-1 text-[10px] bg-white border border-gray-300 text-gray-600 px-1.5 py-0.5 rounded shadow-sm hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300 transition z-10 font-bold"
-                                                            title="퀵 액션 (메모/할일/전달)"
+                                                            className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm"
                                                         >
                                                             📝
                                                         </button>
@@ -3699,9 +3714,9 @@ function AgentDashboard({ user, onLogout }) {
                                         return (
                                             <tr
                                                 key={c.id}
-                                                draggable={true}
-                                                onDragStart={(e) => handleLtDragStart(e, c.id)}
-                                                className="hover:bg-yellow-50/50 transition duration-150 group cursor-grab active:cursor-grabbing"
+                                                id={`row-${c.id}`}
+                                                className={`transition duration-500 group cursor-grab active:cursor-grabbing ${c.id === highlightedId ? 'bg-yellow-200 ring-2 ring-yellow-400 z-10' : 'hover:bg-yellow-50/50'
+                                                    }`}
                                             >
 
                                                 {/* 1. 체크박스 */}
@@ -3827,41 +3842,30 @@ function AgentDashboard({ user, onLogout }) {
                                                     </div>
                                                 </td>
 
-                                                {/* 10. 상담 메모 */}
                                                 <td className="px-3 py-2.5 align-top">
-                                                    <div className="relative group w-full h-8">
+                                                    <div className="flex items-start gap-2 w-full group relative">
                                                         <textarea
-                                                            className="absolute top-0 left-0 w-full h-8 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded px-1 pr-9 text-xs transition-all resize-none leading-normal overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5"
+                                                            className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 text-[12px] overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap"
                                                             rows={1}
-                                                            defaultValue={c.last_memo}
-                                                            onBlur={(e) => {
-                                                                e.target.style.height = '2rem'; // h-8
-                                                                handleInlineUpdate(c.id, 'last_memo', e.target.value);
+                                                            /* ⭐️ 중요: 화면에는 내가 쓴 메모만 보여줌 */
+                                                            value={extractUserMemo(c.last_memo)}
+                                                            onChange={(e) => {
+                                                                // 실시간 타이핑 가능하게 처리
+                                                                const newNote = e.target.value;
+                                                                const systemPart = extractSystemForm(c.last_memo);
+                                                                // 저장 시에는 메모 + 기존 양식을 합쳐서 보냄
+                                                                const merged = newNote + (systemPart ? "\n\n" + systemPart : "");
+                                                                handleInlineUpdate(c.id, 'last_memo', merged);
                                                             }}
-                                                            onKeyDown={(e) => {
-                                                                if (e.key === 'Enter' && e.ctrlKey) {
-                                                                    e.preventDefault();
-                                                                    const val = e.target.value;
-                                                                    const start = e.target.selectionStart;
-                                                                    const end = e.target.selectionEnd;
-                                                                    e.target.value = val.substring(0, start) + "\n" + val.substring(end);
-                                                                    e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                                    e.target.style.height = 'auto';
-                                                                    e.target.style.height = e.target.scrollHeight + 'px';
-                                                                    return;
-                                                                }
-                                                                handleMemoKeyDown(e, c.id, c.name);
-                                                            }}
+                                                            onBlur={(e) => e.target.style.height = '2rem'}
+                                                            onInput={autoResizeTextarea}
                                                             onDoubleClick={() => handleOpenHistory(c)}
-                                                            placeholder="메모 입력..."
-                                                            title="더블클릭하여 히스토리 보기"
+                                                            placeholder="메모..."
+                                                            onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)}
                                                         />
-
-                                                        {/* 퀵 액션 버튼: 상담관리와 동일한 크기/위치 */}
                                                         <button
                                                             onClick={() => openActionMemo(c)}
-                                                            className="absolute right-0 top-1 text-[10px] bg-white border border-gray-300 text-gray-600 px-1.5 py-0.5 rounded shadow-sm hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300 transition z-10 font-bold"
-                                                            title="퀵 액션 (메모/할일/전달)"
+                                                            className="shrink-0 p-1.5 bg-indigo-50 text-indigo-600 rounded border border-indigo-200 hover:bg-indigo-600 hover:text-white transition shadow-sm"
                                                         >
                                                             📝
                                                         </button>
@@ -4043,20 +4047,11 @@ function AgentDashboard({ user, onLogout }) {
                                 </div>
                             </div>
 
-                            {/* 🟢 [수정됨] 접수관리 테이블: 상담관리와 동일한 디자인/사이즈 + 메모 버튼 상시 노출 */}
                             <div className="flex-1 overflow-auto border border-gray-200 rounded-xl shadow-sm bg-white mt-1" style={{ maxHeight: 'calc(100vh - 280px)' }}>
                                 <table className="sheet-table w-full text-left">
-                                    {/* 헤더 */}
+                                    {/* 1. 헤더: 요청하신 순서로 재배치 (11개 컬럼) */}
                                     <thead className="bg-slate-100 text-slate-500 font-bold uppercase text-[11px] tracking-tight border-b border-slate-200 sticky top-0 z-10">
                                         <tr>
-                                            <th className="px-3 py-2 w-10 text-center border-r border-slate-200">
-                                                <input
-                                                    type="checkbox"
-                                                    className="accent-indigo-600 cursor-pointer w-3.5 h-3.5"
-                                                    onChange={(e) => handleSelectAll(e, displayedData)}
-                                                    checked={displayedData.length > 0 && selectedIds.length === displayedData.length}
-                                                />
-                                            </th>
                                             <th className="px-3 py-2 w-20 text-right bg-indigo-50 text-indigo-700 border-r border-slate-200">순수익</th>
                                             <th className="px-3 py-2 w-24 border-r border-slate-200">플랫폼</th>
                                             <th className="px-3 py-2 w-24 border-r border-slate-200">접수일</th>
@@ -4065,36 +4060,18 @@ function AgentDashboard({ user, onLogout }) {
                                             <th className="px-3 py-2 w-32 border-r border-slate-200">연락처</th>
                                             <th className="px-3 py-2 w-16 text-center border-r border-slate-200">정책(만)</th>
                                             <th className="px-3 py-2 w-16 text-center border-r border-slate-200">지원(만)</th>
-                                            <th className="px-3 py-2 w-12 text-center border-r border-slate-200">체크</th>
+                                            <th className="px-3 py-2 w-12 text-center border-r border-slate-200 bg-emerald-50 text-emerald-700">체크</th>
                                             <th className="px-3 py-2 w-32 text-center border-r border-slate-200">상태</th>
                                             <th className="px-3 py-2 min-w-[250px]">후처리 메모 (누락방지)</th>
                                         </tr>
                                     </thead>
 
-                                    {/* 바디 */}
+                                    {/* 2. 바디: 헤더와 동일한 순서로 데이터 출력 (11개 컬럼) */}
                                     <tbody className="divide-y divide-gray-100 text-xs text-gray-700">
                                         {displayedData.map(c => {
                                             const checklistItems = parseChecklist(c.checklist);
                                             const isPostProcessed = checklistItems.includes('후처리완료');
-
-                                            const agentPolicy = safeParseInt(c.agent_policy);
-                                            const supportAmt = safeParseInt(c.support_amt);
-                                            const netProfit = agentPolicy - supportAmt; // '만' 단위
-                                            const isRefunded = checklistItems.includes('환수완료');
-
-                                            // 매출 계산 (해지 고려)
-                                            let displayRevenue = netProfit * 10000;
-                                            if (c.status === '해지진행') {
-                                                if (c.installed_date) {
-                                                    const installDate = new Date(c.installed_date);
-                                                    const today = new Date();
-                                                    const isSameMonth = installDate.getFullYear() === today.getFullYear() && installDate.getMonth() === today.getMonth();
-                                                    if (isSameMonth) displayRevenue = 0;
-                                                    else displayRevenue = -Math.abs(displayRevenue);
-                                                } else {
-                                                    displayRevenue = 0;
-                                                }
-                                            }
+                                            const netProfit = safeParseInt(c.agent_policy) - safeParseInt(c.support_amt);
 
                                             const togglePostProcess = (e) => {
                                                 e.stopPropagation();
@@ -4104,98 +4081,61 @@ function AgentDashboard({ user, onLogout }) {
                                                 handleInlineUpdate(c.id, 'checklist', newList.join(','));
                                             };
 
-                                            const toggleRefundStatus = () => {
-                                                const newChecklist = isRefunded
-                                                    ? checklistItems.filter(item => item !== '환수완료')
-                                                    : [...checklistItems, '환수완료'];
-                                                handleInlineUpdate(c.id, 'checklist', newChecklist.join(','));
-                                            };
-
                                             return (
-                                                <tr key={c.id} className={`hover:bg-indigo-50/30 transition-colors group ${isPostProcessed ? 'bg-gray-50' : ''}`}>
-
-                                                    {/* 0. 체크박스 */}
-                                                    <td className="px-3 py-2.5 text-center border-r border-slate-100">
-                                                        <input
-                                                            type="checkbox"
-                                                            className="accent-indigo-600 cursor-pointer w-3.5 h-3.5"
-                                                            checked={selectedIds.includes(c.id)}
-                                                            onChange={() => handleCheck(c.id)}
-                                                        />
-                                                    </td>
-
+                                                <tr
+                                                    key={c.id}
+                                                    className={`transition-all duration-200 group ${isPostProcessed
+                                                            ? 'bg-slate-300 text-gray-600' // ✅ 체크 시 확실히 어두운 회색 강조
+                                                            : 'bg-white hover:bg-indigo-50/30'
+                                                        }`}
+                                                >
                                                     {/* 1. 순수익 */}
-                                                    <td className={`px-3 py-2.5 text-right font-black border-r border-slate-100 ${displayRevenue >= 0 ? 'text-blue-600' : 'text-red-500'}`}>
+                                                    <td className={`px-3 py-2.5 text-right font-black border-r border-slate-100 ${isPostProcessed ? 'text-gray-500' : (netProfit >= 0 ? 'text-blue-600' : 'text-red-500')}`}>
                                                         {netProfit}만
                                                     </td>
 
                                                     {/* 2. 플랫폼 */}
-                                                    <td className="px-3 py-2.5 border-r border-slate-100">
-                                                        <select
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 rounded text-xs font-bold text-gray-600 outline-none cursor-pointer w-full py-0.5"
-                                                            value={c.platform}
-                                                            onChange={(e) => handleInlineUpdate(c.id, 'platform', e.target.value)}
-                                                        >
-                                                            {platformList.map(p => <option key={p} value={p}>{p}</option>)}
-                                                        </select>
-                                                    </td>
+                                                    <td className="px-3 py-2.5 border-r border-slate-100 font-bold">{c.platform}</td>
 
                                                     {/* 3. 접수일 */}
-                                                    <td className="px-3 py-2.5 text-gray-500 text-[11px] font-mono border-r border-slate-100 whitespace-nowrap">
-                                                        {c.upload_date?.substring(2, 10)}
-                                                    </td>
+                                                    <td className="px-3 py-2.5 text-gray-400 border-r border-slate-100">{c.upload_date?.substring(2, 10)}</td>
 
-                                                    {/* 4. 설치일 */}
+                                                    {/* 4. 설치일 (달력 선택 가능하도록 수정) */}
                                                     <td className="px-3 py-2.5 border-r border-slate-100">
                                                         <input
                                                             type="date"
-                                                            className="bg-transparent text-gray-800 font-bold text-[11px] outline-none border-b border-transparent hover:border-gray-300 focus:border-indigo-500 cursor-pointer w-24 py-0.5"
+                                                            className="bg-transparent text-gray-800 font-bold outline-none w-full cursor-pointer hover:text-indigo-600 transition-colors"
                                                             value={c.installed_date || ''}
-                                                            onClick={(e) => e.target.showPicker()}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation(); // 드래그 방지
+                                                                e.target.showPicker(); // 클릭 시 달력 자동 팝업
+                                                            }}
                                                             onChange={(e) => handleInlineUpdate(c.id, 'installed_date', e.target.value)}
                                                         />
                                                     </td>
 
                                                     {/* 5. 고객명 */}
-                                                    <td className="px-3 py-2.5 border-r border-slate-100">
-                                                        <input
-                                                            type="text"
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 outline-none w-full font-bold text-gray-800 transition py-0.5"
-                                                            defaultValue={c.name}
-                                                            onBlur={(e) => handleInlineUpdate(c.id, 'name', e.target.value)}
-                                                        />
-                                                    </td>
+                                                    <td className="px-3 py-2.5 border-r border-slate-100 font-bold">{c.name}</td>
 
                                                     {/* 6. 연락처 */}
-                                                    <td className="px-3 py-2.5 border-r border-slate-100">
-                                                        <input
-                                                            type="text"
-                                                            className="bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 outline-none w-full text-gray-600 font-mono tracking-tight transition py-0.5"
-                                                            defaultValue={c.phone}
-                                                            onBlur={(e) => handleInlineUpdate(c.id, 'phone', e.target.value)}
-                                                        />
-                                                        <div className="mt-1">
-                                                            <button onClick={(e) => handleOpenChat(e, c)} className="text-[10px] bg-white border border-gray-200 text-indigo-600 px-1.5 py-0.5 rounded hover:bg-indigo-50 transition flex items-center gap-1 w-fit">
-                                                                <span>💬</span> SMS
-                                                            </button>
+                                                    <td className="px-3 py-2.5 border-r border-slate-100 font-mono">
+                                                        <div className="flex flex-col">
+                                                            <span>{c.phone}</span>
+                                                            <button onClick={(e) => handleOpenChat(e, c)} className="text-[10px] text-indigo-500 hover:underline w-fit font-bold">💬 SMS</button>
                                                         </div>
                                                     </td>
 
                                                     {/* 7. 정책 */}
-                                                    <td className="px-3 py-2.5 text-center border-r border-slate-100">
-                                                        <input type="number" className="w-10 text-center bg-transparent text-xs font-bold text-indigo-600 outline-none border-b border-transparent hover:border-indigo-300 focus:border-indigo-500 no-spin py-0.5" defaultValue={c.agent_policy} onBlur={(e) => handleInlineUpdate(c.id, 'agent_policy', e.target.value)} />
-                                                    </td>
+                                                    <td className="px-3 py-2.5 text-center border-r border-slate-100">{c.agent_policy}</td>
 
-                                                    {/* 8. 지원금 */}
-                                                    <td className="px-3 py-2.5 text-center border-r border-slate-100">
-                                                        <input type="number" className="w-10 text-center bg-transparent text-xs font-bold text-red-500 outline-none border-b border-transparent hover:border-red-300 focus:border-red-500 no-spin py-0.5" defaultValue={c.support_amt} onBlur={(e) => handleInlineUpdate(c.id, 'support_amt', e.target.value)} />
-                                                    </td>
+                                                    {/* 8. 지원 */}
+                                                    <td className="px-3 py-2.5 text-center border-r border-slate-100">{c.support_amt}</td>
 
-                                                    {/* 9. 후처리 체크 */}
+                                                    {/* 9. 체크 (후처리완료) */}
                                                     <td className="px-3 py-2.5 text-center border-r border-slate-100">
                                                         <input
                                                             type="checkbox"
-                                                            className="w-4 h-4 accent-green-600 cursor-pointer"
+                                                            className="w-5 h-5 accent-indigo-600 cursor-pointer"
                                                             checked={isPostProcessed}
                                                             onChange={togglePostProcess}
                                                         />
@@ -4203,84 +4143,37 @@ function AgentDashboard({ user, onLogout }) {
 
                                                     {/* 10. 상태 */}
                                                     <td className="px-3 py-2.5 border-r border-slate-100">
-                                                        <div className="flex flex-col gap-1.5 w-full">
-                                                            <div className="relative w-full">
-                                                                <select
-                                                                    className={`w-full py-1.5 pl-2 pr-6 rounded-lg text-[11px] font-bold outline-none border cursor-pointer appearance-none text-center transition-colors ${getBadgeStyle(c.status)}`}
-                                                                    value={c.status}
-                                                                    onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}
-                                                                >
-                                                                    {receptionList.map(status => (
-                                                                        <option key={status} value={status} className="bg-white text-gray-700">
-                                                                            {status === '접수완료' ? '📝 접수완료' :
-                                                                                status === '설치완료' ? '✅ 설치완료' :
-                                                                                    status === '해지진행' ? '⚠️ 해지진행' : status}
-                                                                        </option>
-                                                                    ))}
-                                                                    <optgroup label="데이터 이동">
-                                                                        <option value="가망등록">⚡ 가망등록 (복사)</option>
-                                                                    </optgroup>
-                                                                </select>
-                                                                <div className="pointer-events-none absolute inset-y-0 right-1.5 flex items-center px-1 text-gray-500 opacity-60">
-                                                                    <svg className="fill-current h-3 w-3" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" /></svg>
-                                                                </div>
-                                                            </div>
-                                                            {c.status === '해지진행' && (
-                                                                <button
-                                                                    onClick={toggleRefundStatus}
-                                                                    className={`w-full py-0.5 rounded text-[10px] font-bold border transition ${isRefunded ? 'bg-gray-100 text-gray-500 border-gray-200' : 'bg-red-100 text-red-600 border-red-200 animate-pulse'}`}
-                                                                >
-                                                                    {isRefunded ? '✅ 환수완료' : '🚨 미환수'}
-                                                                </button>
-                                                            )}
-                                                        </div>
+                                                        <select
+                                                            className={`w-full py-1 rounded text-[10px] font-bold border outline-none ${getBadgeStyle(c.status)}`}
+                                                            value={c.status}
+                                                            onChange={(e) => handleStatusChangeRequest(c.id, e.target.value)}
+                                                        >
+                                                            {receptionList.map(status => <option key={status} value={status}>{status}</option>)}
+                                                        </select>
                                                     </td>
 
-                                                    {/* 11. 후처리 메모 (퀵 액션 버튼 포함) */}
+                                                    {/* 11. 메모 */}
                                                     <td className="px-3 py-2.5 align-top">
-                                                        <div className="relative group w-full h-8">
+                                                        <div className="flex items-start gap-2">
                                                             <textarea
-                                                                className={`absolute top-0 left-0 w-full h-8 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded px-1 pr-9 text-xs transition-all resize-none leading-normal overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 ${isPostProcessed ? 'text-gray-400 line-through italic' : 'text-gray-700'}`}
+                                                                className={`flex-1 bg-transparent border-b border-transparent hover:border-gray-300 focus:border-indigo-500 rounded p-1 text-[11px] outline-none resize-none transition-all ${isPostProcessed ? 'text-gray-500' : 'text-gray-700'}`}
                                                                 rows={1}
-                                                                defaultValue={c.last_memo}
-                                                                onBlur={(e) => {
-                                                                    e.target.style.height = '2rem';
-                                                                    handleInlineUpdate(c.id, 'last_memo', e.target.value);
+                                                                value={extractUserMemo(c.last_memo)}
+                                                                onInput={autoResizeTextarea}
+                                                                onChange={(e) => {
+                                                                    const merged = e.target.value + "\n\n" + extractSystemForm(c.last_memo);
+                                                                    handleInlineUpdate(c.id, 'last_memo', merged);
                                                                 }}
-                                                                onKeyDown={(e) => {
-                                                                    if (e.key === 'Enter' && e.ctrlKey) {
-                                                                        e.preventDefault();
-                                                                        const val = e.target.value;
-                                                                        const start = e.target.selectionStart;
-                                                                        const end = e.target.selectionEnd;
-                                                                        e.target.value = val.substring(0, start) + "\n" + val.substring(end);
-                                                                        e.target.selectionStart = e.target.selectionEnd = start + 1;
-                                                                        e.target.style.height = 'auto';
-                                                                        e.target.style.height = e.target.scrollHeight + 'px';
-                                                                        return;
-                                                                    }
-                                                                    handleMemoKeyDown(e, c.id, c.name);
-                                                                }}
-                                                                onDoubleClick={() => handleOpenHistory(c)}
-                                                                placeholder={c.status === '해지진행' ? "후처리 내용 입력..." : "메모..."}
-                                                                title="더블클릭하여 히스토리 보기"
+                                                                onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)}
                                                             />
-
-                                                            {/* 🟢 [수정됨] 퀵 액션 버튼: 항상 보임, 디자인 통일 */}
-                                                            <button
-                                                                onClick={() => openActionMemo(c)}
-                                                                className="absolute right-0 top-1 text-[10px] bg-white border border-gray-300 text-gray-600 px-1.5 py-0.5 rounded shadow-sm hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-300 transition z-10 font-bold"
-                                                                title="퀵 액션 (메모/할일/전달)"
-                                                            >
-                                                                📝
-                                                            </button>
+                                                            <button onClick={() => openActionMemo(c)} className={`shrink-0 p-1 rounded border transition-colors ${isPostProcessed ? 'bg-gray-200 text-gray-400' : 'bg-gray-50 hover:bg-indigo-600 hover:text-white'}`}>📝</button>
                                                         </div>
                                                     </td>
                                                 </tr>
                                             );
                                         })}
                                         {displayedData.length === 0 && (
-                                            <tr><td colSpan="12" className="p-20 text-center text-gray-400">접수된 데이터가 없습니다.</td></tr>
+                                            <tr><td colSpan="11" className="p-20 text-center text-gray-400">데이터가 없습니다.</td></tr>
                                         )}
                                     </tbody>
                                 </table>
@@ -4435,20 +4328,26 @@ function AgentDashboard({ user, onLogout }) {
                                                             )}
                                                         </div>
                                                     </td>
-                                                    {/* 10. 후처리 메모 (⭐️ 버튼 상시 노출 및 레이아웃 최적화) */}
-                                                    {/* 🟢 [수정] 설치완료 탭: 메모칸 기능 강화 (줄바꿈 및 자동높이 적용) */}
                                                     <td className="px-3 py-2.5 align-top">
-                                                        <div className="flex items-start gap-2 w-full">
+                                                        <div className="flex items-start gap-2 w-full group relative">
                                                             <textarea
-                                                                className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-sm text-[12px]"
-                                                                defaultValue={c.last_memo}
-                                                                onBlur={(e) => {
-                                                                    e.target.style.height = '2rem'; // 포커스 아웃 시 높이 복구
-                                                                    handleInlineUpdate(c.id, 'last_memo', e.target.value);
-                                                                }}
-                                                                onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)} // ⭐️ 줄바꿈/저장 로직 연결
-                                                                onInput={autoResizeTextarea} // ⭐️ 타이핑 시 높이 자동 조절
+                                                                className="flex-1 bg-transparent border-b border-gray-100 hover:border-gray-300 focus:border-indigo-500 rounded p-1 transition-all resize-none leading-normal min-h-[32px] focus:bg-white focus:shadow-xl focus:z-50 focus:h-auto focus:min-h-[80px] py-1.5 text-[12px] overflow-hidden whitespace-nowrap focus:whitespace-pre-wrap"
                                                                 rows={1}
+                                                                /* ⭐️ 중요: 화면에는 내가 쓴 메모만 보여줌 */
+                                                                value={extractUserMemo(c.last_memo)}
+                                                                onChange={(e) => {
+                                                                    // 실시간 타이핑 가능하게 처리
+                                                                    const newNote = e.target.value;
+                                                                    const systemPart = extractSystemForm(c.last_memo);
+                                                                    // 저장 시에는 메모 + 기존 양식을 합쳐서 보냄
+                                                                    const merged = newNote + (systemPart ? "\n\n" + systemPart : "");
+                                                                    handleInlineUpdate(c.id, 'last_memo', merged);
+                                                                }}
+                                                                onBlur={(e) => e.target.style.height = '2rem'}
+                                                                onInput={autoResizeTextarea}
+                                                                onDoubleClick={() => handleOpenHistory(c)}
+                                                                placeholder="메모..."
+                                                                onKeyDown={(e) => handleMemoKeyDown(e, c.id, c.name)}
                                                             />
                                                             <button
                                                                 onClick={() => openActionMemo(c)}
@@ -4466,198 +4365,198 @@ function AgentDashboard({ user, onLogout }) {
                             </div>
                         </div>
                     </div>
-                )} 
+                )}
 
-            {/* 🟢 [개편완료] 접수 완료 모달: 좌측 양식 / 우측 선택 / 상단 탭 */}
-            {showCompletionModal && completionTarget && (
-                    <PopoutWindow title="📝 접수 양식 작성 및 확정" onClose={() => setShowCompletionModal(false)} width={1100} height={850} trigger={completionTrigger} >
-                    <div className="flex flex-col h-full bg-slate-100 font-sans overflow-hidden">
+                {/* 🟢 [개편완료] 접수 완료 모달: 좌측 양식 / 우측 선택 / 상단 탭 */}
+                {showCompletionModal && completionTarget && (
+                    <PopoutWindow title="📝 접수 양식 작성 및 확정" onClose={() => setShowCompletionModal(false)} width={1100} height={850} windowKey="admin_reception_window">
+                        <div className="flex flex-col h-full bg-slate-100 font-sans overflow-hidden">
 
-                        {/* (1) 상단 통신사 탭 (폴더 스타일) */}
-                        <div className="bg-white border-b border-gray-200 p-2 flex gap-1 overflow-x-auto hide-scrollbar shrink-0">
-                            {Object.keys(policyData).map((pName) => (
-                                <button
-                                    key={pName}
-                                    onClick={() => { setSelectedPlatform(pName); setDynamicFormData({}); }}
-                                    className={`px-6 py-2.5 rounded-t-xl font-bold text-sm transition-all border-t border-l border-r
-                            ${selectedPlatform === pName
-                                            ? 'bg-indigo-600 text-white border-indigo-600 shadow-[0_-2px_10px_rgba(0,0,0,0.1)] translate-y-[2px] z-10'
-                                            : 'bg-gray-100 text-gray-500 border-transparent hover:bg-gray-200'}`}
-                                >
-                                    {pName}
-                                </button>
-                            ))}
-                        </div>
-
-                        <div className="flex flex-1 overflow-hidden p-4 gap-4">
-
-                            {/* (2) 좌측: 접수 양식 미리보기 및 상세입력 */}
-                            <div className="w-[450px] bg-white rounded-2xl shadow-xl border border-gray-200 flex flex-col overflow-hidden animate-fade-in-right">
-                                <div className="bg-slate-800 text-white p-4 flex justify-between items-center">
-                                    <span className="font-bold text-sm">📋 실시간 접수 양식 미리보기</span>
-                                    <span className="text-[10px] bg-indigo-500 px-2 py-0.5 rounded">Auto-Fill</span>
-                                </div>
-
-                                <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-slate-50">
-                                    {/* 양식 섹션 1: 고객정보 */}
-                                    <div className="mb-6">
-                                        <h4 className="text-xs font-black text-indigo-600 mb-3 border-b border-indigo-100 pb-1">■ 고객정보</h4>
-                                        <div className="space-y-3">
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-xs font-bold text-gray-500 w-16">성명:</span>
-                                                <input type="text" className="flex-1 bg-white border-b border-gray-200 p-1 text-sm font-bold outline-none focus:border-indigo-500" defaultValue={completionTarget.name} />
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-xs font-bold text-gray-500 w-16">연락처:</span>
-                                                <input type="text" className="flex-1 bg-white border-b border-gray-200 p-1 text-sm font-mono outline-none focus:border-indigo-500" defaultValue={completionTarget.phone} />
-                                            </div>
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-xs font-bold text-gray-500 w-16 text-red-500">주민번호:</span>
-                                                <input type="text" className="flex-1 bg-white border border-red-200 rounded px-2 py-1 text-sm font-mono outline-none focus:ring-2 focus:ring-red-100"
-                                                    placeholder="800101-1******"
-                                                    onChange={e => setDynamicFormData(prev => ({ ...prev, jumin: e.target.value }))} />
-                                            </div>
-                                        </div>
-                                    </div>
-
-                                    {/* 양식 섹션 2: 상품정보 (우측 선택 시 자동 변환) */}
-                                    <div className="mb-6 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
-                                        <h4 className="text-xs font-black text-indigo-600 mb-3 border-b border-indigo-100 pb-1">■ 상품정보</h4>
-                                        <div className="space-y-2 text-sm">
-                                            <p className="flex justify-between">
-                                                <span className="text-gray-500">상품:</span>
-                                                <span className="font-bold text-gray-800">
-                                                    {Object.values(dynamicFormData).filter(v => v.name).map(v => v.name).join(' + ') || '(상품을 선택하세요)'}
-                                                </span>
-                                            </p>
-                                            <p className="flex justify-between">
-                                                <span className="text-gray-500">월 요금:</span>
-                                                <span className="font-black text-blue-600">
-                                                    {formatCurrency(Object.values(dynamicFormData).reduce((acc, cur) => acc + (cur.fee || 0), 0))}원
-                                                </span>
-                                            </p>
-                                            <p className="flex justify-between">
-                                                <span className="text-gray-500">설치비:</span>
-                                                <span className="font-bold text-gray-700">
-                                                    {formatCurrency(Object.values(dynamicFormData).reduce((acc, cur) => acc + (cur.install_fee || 0), 0))}원
-                                                </span>
-                                            </p>
-                                            <p className="flex justify-between border-t pt-2 mt-2">
-                                                <span className="text-gray-500">정책금:</span>
-                                                <span className="font-black text-indigo-600 text-lg">
-                                                    {formatCurrency(Object.values(dynamicFormData).reduce((acc, cur) => acc + (cur.policy || 0), 0) * 10000)}원
-                                                </span>
-                                            </p>
-                                        </div>
-                                    </div>
-
-                                    {/* 양식 섹션 3: 설치정보 */}
-                                    <div>
-                                        <h4 className="text-xs font-black text-indigo-600 mb-3 border-b border-indigo-100 pb-1">■ 설치정보</h4>
-                                        <div className="space-y-3">
-                                            <div>
-                                                <label className="block text-[10px] font-bold text-gray-400 mb-1">설치 주소지</label>
-                                                <input type="text" className="w-full bg-white border border-gray-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500"
-                                                    placeholder="서울시 강남구..."
-                                                    onChange={e => setDynamicFormData(prev => ({ ...prev, address: e.target.value }))} />
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-2">
-                                                <div>
-                                                    <label className="block text-[10px] font-bold text-gray-400 mb-1">설치 희망일</label>
-                                                    <input type="date" className="w-full bg-white border border-gray-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500"
-                                                        onChange={e => setDynamicFormData(prev => ({ ...prev, hope_date: e.target.value }))} />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-[10px] font-bold text-gray-400 mb-1">자동이체 은행</label>
-                                                    <input type="text" className="w-full bg-white border border-gray-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500"
-                                                        placeholder="은행명"
-                                                        onChange={e => setDynamicFormData(prev => ({ ...prev, bank: e.target.value }))} />
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <label className="block text-[10px] font-bold text-gray-400 mb-1">비고 및 사은품</label>
-                                                <input type="text" className="w-full bg-white border border-gray-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500 font-bold text-indigo-600"
-                                                    placeholder="예: 공기청정기, 현금 지원 등"
-                                                    onChange={e => setDynamicFormData(prev => ({ ...prev, gift: e.target.value }))} />
-                                            </div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            {/* (3) 우측: 상품 상세 설정 (선택 구역) */}
-                            <div className="flex-1 flex flex-col gap-4 overflow-hidden">
-
-                                {/* 인터넷 상품 리스트 */}
-                                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex-1 flex flex-col overflow-hidden">
-                                    <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-extrabold text-gray-700 flex items-center gap-2">
-                                        🌐 인터넷 상품 선택
-                                    </div>
-                                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-2">
-                                        {policyData[selectedPlatform]?.internet.map(p => (
-                                            <div
-                                                key={p.id}
-                                                onClick={() => handleFormDataChange('internet', p.name)}
-                                                className={`p-4 rounded-xl border-2 cursor-pointer transition-all hover:shadow-md flex justify-between items-center
-                                        ${dynamicFormData.internet?.name === p.name ? 'border-indigo-500 bg-indigo-50 shadow-inner' : 'border-gray-100 hover:border-indigo-200'}`}
-                                            >
-                                                <div>
-                                                    <div className="font-bold text-gray-800">{p.name}</div>
-                                                    <div className="text-[10px] text-gray-400 mt-1">요금: {formatCurrency(p.fee)}원 | 설치비: {formatCurrency(p.install_fee)}원</div>
-                                                </div>
-                                                <div className="text-right">
-                                                    <div className="text-indigo-600 font-black text-lg">+{p.policy}만</div>
-                                                    {dynamicFormData.internet?.name === p.name && <span className="text-[10px] font-bold text-indigo-500">SELECTED</span>}
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                {/* TV/부가 서비스 리스트 */}
-                                <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex-1 flex flex-col overflow-hidden">
-                                    <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-extrabold text-gray-700 flex items-center gap-2">
-                                        📺 TV / 부가서비스 선택
-                                    </div>
-                                    <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-2">
-                                        {[...(policyData[selectedPlatform]?.bundle || []), ...(policyData[selectedPlatform]?.addon || [])].map(p => (
-                                            <div
-                                                key={p.id}
-                                                onClick={() => handleFormDataChange(p.id, p.name)} // ID별 개별 선택 가능하도록 처리 필요
-                                                className={`p-4 rounded-xl border-2 cursor-pointer transition-all hover:shadow-md flex justify-between items-center
-                                        ${dynamicFormData[p.id] ? 'border-emerald-500 bg-emerald-50' : 'border-gray-100 hover:border-emerald-200'}`}
-                                            >
-                                                <div>
-                                                    <div className="font-bold text-gray-800">{p.name}</div>
-                                                    <div className="text-[10px] text-gray-400 mt-1">월 요금: {formatCurrency(p.fee)}원</div>
-                                                </div>
-                                                <div className="text-right">
-                                                    <div className="text-emerald-600 font-black text-lg">+{p.policy || p.cost}만</div>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
-                                </div>
-
-                                {/* 하단 최종 액션 버튼 */}
-                                <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-lg flex gap-3">
-                                    <button onClick={() => setShowCompletionModal(false)} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-xl font-bold hover:bg-gray-200 transition">취소</button>
+                            {/* (1) 상단 통신사 탭 (폴더 스타일) */}
+                            <div className="bg-white border-b border-gray-200 p-2 flex gap-1 overflow-x-auto hide-scrollbar shrink-0">
+                                {Object.keys(policyData).map((pName) => (
                                     <button
-                                        onClick={() => {
-                                            const finalOrder = generateOrderText();
-                                            // 실제 확정 로직 (PATCH 및 Log 기록)
-                                            handleConfirmCompletion(finalOrder);
-                                        }}
-                                        className="flex-[2] py-4 bg-indigo-600 text-white rounded-xl font-black text-lg shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition transform active:scale-95"
+                                        key={pName}
+                                        onClick={() => { setSelectedPlatform(pName); setDynamicFormData({}); }}
+                                        className={`px-6 py-2.5 rounded-t-xl font-bold text-sm transition-all border-t border-l border-r
+                            ${selectedPlatform === pName
+                                                ? 'bg-indigo-600 text-white border-indigo-600 shadow-[0_-2px_10px_rgba(0,0,0,0.1)] translate-y-[2px] z-10'
+                                                : 'bg-gray-100 text-gray-500 border-transparent hover:bg-gray-200'}`}
                                     >
-                                        🎉 접수 완료 및 양식 생성
+                                        {pName}
                                     </button>
+                                ))}
+                            </div>
+
+                            <div className="flex flex-1 overflow-hidden p-4 gap-4">
+
+                                {/* (2) 좌측: 접수 양식 미리보기 및 상세입력 */}
+                                <div className="w-[450px] bg-white rounded-2xl shadow-xl border border-gray-200 flex flex-col overflow-hidden animate-fade-in-right">
+                                    <div className="bg-slate-800 text-white p-4 flex justify-between items-center">
+                                        <span className="font-bold text-sm">📋 실시간 접수 양식 미리보기</span>
+                                        <span className="text-[10px] bg-indigo-500 px-2 py-0.5 rounded">Auto-Fill</span>
+                                    </div>
+
+                                    <div className="flex-1 overflow-y-auto p-6 custom-scrollbar bg-slate-50">
+                                        {/* 양식 섹션 1: 고객정보 */}
+                                        <div className="mb-6">
+                                            <h4 className="text-xs font-black text-indigo-600 mb-3 border-b border-indigo-100 pb-1">■ 고객정보</h4>
+                                            <div className="space-y-3">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs font-bold text-gray-500 w-16">성명:</span>
+                                                    <input type="text" className="flex-1 bg-white border-b border-gray-200 p-1 text-sm font-bold outline-none focus:border-indigo-500" defaultValue={completionTarget.name} />
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs font-bold text-gray-500 w-16">연락처:</span>
+                                                    <input type="text" className="flex-1 bg-white border-b border-gray-200 p-1 text-sm font-mono outline-none focus:border-indigo-500" defaultValue={completionTarget.phone} />
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs font-bold text-gray-500 w-16 text-red-500">주민번호:</span>
+                                                    <input type="text" className="flex-1 bg-white border border-red-200 rounded px-2 py-1 text-sm font-mono outline-none focus:ring-2 focus:ring-red-100"
+                                                        placeholder="800101-1******"
+                                                        onChange={e => setDynamicFormData(prev => ({ ...prev, jumin: e.target.value }))} />
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        {/* 양식 섹션 2: 상품정보 (우측 선택 시 자동 변환) */}
+                                        <div className="mb-6 bg-white p-4 rounded-xl border border-gray-200 shadow-sm">
+                                            <h4 className="text-xs font-black text-indigo-600 mb-3 border-b border-indigo-100 pb-1">■ 상품정보</h4>
+                                            <div className="space-y-2 text-sm">
+                                                <p className="flex justify-between">
+                                                    <span className="text-gray-500">상품:</span>
+                                                    <span className="font-bold text-gray-800">
+                                                        {Object.values(dynamicFormData).filter(v => v.name).map(v => v.name).join(' + ') || '(상품을 선택하세요)'}
+                                                    </span>
+                                                </p>
+                                                <p className="flex justify-between">
+                                                    <span className="text-gray-500">월 요금:</span>
+                                                    <span className="font-black text-blue-600">
+                                                        {formatCurrency(Object.values(dynamicFormData).reduce((acc, cur) => acc + (cur.fee || 0), 0))}원
+                                                    </span>
+                                                </p>
+                                                <p className="flex justify-between">
+                                                    <span className="text-gray-500">설치비:</span>
+                                                    <span className="font-bold text-gray-700">
+                                                        {formatCurrency(Object.values(dynamicFormData).reduce((acc, cur) => acc + (cur.install_fee || 0), 0))}원
+                                                    </span>
+                                                </p>
+                                                <p className="flex justify-between border-t pt-2 mt-2">
+                                                    <span className="text-gray-500">정책금:</span>
+                                                    <span className="font-black text-indigo-600 text-lg">
+                                                        {formatCurrency(Object.values(dynamicFormData).reduce((acc, cur) => acc + (cur.policy || 0), 0) * 10000)}원
+                                                    </span>
+                                                </p>
+                                            </div>
+                                        </div>
+
+                                        {/* 양식 섹션 3: 설치정보 */}
+                                        <div>
+                                            <h4 className="text-xs font-black text-indigo-600 mb-3 border-b border-indigo-100 pb-1">■ 설치정보</h4>
+                                            <div className="space-y-3">
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-gray-400 mb-1">설치 주소지</label>
+                                                    <input type="text" className="w-full bg-white border border-gray-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500"
+                                                        placeholder="서울시 강남구..."
+                                                        onChange={e => setDynamicFormData(prev => ({ ...prev, address: e.target.value }))} />
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-2">
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-400 mb-1">설치 희망일</label>
+                                                        <input type="date" className="w-full bg-white border border-gray-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500"
+                                                            onChange={e => setDynamicFormData(prev => ({ ...prev, hope_date: e.target.value }))} />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-[10px] font-bold text-gray-400 mb-1">자동이체 은행</label>
+                                                        <input type="text" className="w-full bg-white border border-gray-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500"
+                                                            placeholder="은행명"
+                                                            onChange={e => setDynamicFormData(prev => ({ ...prev, bank: e.target.value }))} />
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-[10px] font-bold text-gray-400 mb-1">비고 및 사은품</label>
+                                                    <input type="text" className="w-full bg-white border border-gray-200 rounded-lg p-2 text-xs outline-none focus:border-indigo-500 font-bold text-indigo-600"
+                                                        placeholder="예: 공기청정기, 현금 지원 등"
+                                                        onChange={e => setDynamicFormData(prev => ({ ...prev, gift: e.target.value }))} />
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* (3) 우측: 상품 상세 설정 (선택 구역) */}
+                                <div className="flex-1 flex flex-col gap-4 overflow-hidden">
+
+                                    {/* 인터넷 상품 리스트 */}
+                                    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex-1 flex flex-col overflow-hidden">
+                                        <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-extrabold text-gray-700 flex items-center gap-2">
+                                            🌐 인터넷 상품 선택
+                                        </div>
+                                        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-2">
+                                            {policyData[selectedPlatform]?.internet.map(p => (
+                                                <div
+                                                    key={p.id}
+                                                    onClick={() => handleFormDataChange('internet', p.name)}
+                                                    className={`p-4 rounded-xl border-2 cursor-pointer transition-all hover:shadow-md flex justify-between items-center
+                                        ${dynamicFormData.internet?.name === p.name ? 'border-indigo-500 bg-indigo-50 shadow-inner' : 'border-gray-100 hover:border-indigo-200'}`}
+                                                >
+                                                    <div>
+                                                        <div className="font-bold text-gray-800">{p.name}</div>
+                                                        <div className="text-[10px] text-gray-400 mt-1">요금: {formatCurrency(p.fee)}원 | 설치비: {formatCurrency(p.install_fee)}원</div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <div className="text-indigo-600 font-black text-lg">+{p.policy}만</div>
+                                                        {dynamicFormData.internet?.name === p.name && <span className="text-[10px] font-bold text-indigo-500">SELECTED</span>}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* TV/부가 서비스 리스트 */}
+                                    <div className="bg-white rounded-2xl border border-gray-200 shadow-sm flex-1 flex flex-col overflow-hidden">
+                                        <div className="bg-gray-50 px-4 py-3 border-b border-gray-200 font-extrabold text-gray-700 flex items-center gap-2">
+                                            📺 TV / 부가서비스 선택
+                                        </div>
+                                        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar space-y-2">
+                                            {[...(policyData[selectedPlatform]?.bundle || []), ...(policyData[selectedPlatform]?.addon || [])].map(p => (
+                                                <div
+                                                    key={p.id}
+                                                    onClick={() => handleFormDataChange(p.id, p.name)} // ID별 개별 선택 가능하도록 처리 필요
+                                                    className={`p-4 rounded-xl border-2 cursor-pointer transition-all hover:shadow-md flex justify-between items-center
+                                        ${dynamicFormData[p.id] ? 'border-emerald-500 bg-emerald-50' : 'border-gray-100 hover:border-emerald-200'}`}
+                                                >
+                                                    <div>
+                                                        <div className="font-bold text-gray-800">{p.name}</div>
+                                                        <div className="text-[10px] text-gray-400 mt-1">월 요금: {formatCurrency(p.fee)}원</div>
+                                                    </div>
+                                                    <div className="text-right">
+                                                        <div className="text-emerald-600 font-black text-lg">+{p.policy || p.cost}만</div>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+
+                                    {/* 하단 최종 액션 버튼 */}
+                                    <div className="bg-white p-4 rounded-2xl border border-gray-200 shadow-lg flex gap-3">
+                                        <button onClick={() => setShowCompletionModal(false)} className="flex-1 py-4 bg-gray-100 text-gray-500 rounded-xl font-bold hover:bg-gray-200 transition">취소</button>
+                                        <button
+                                            onClick={() => {
+                                                const finalOrder = generateOrderText();
+                                                // 실제 확정 로직 (PATCH 및 Log 기록)
+                                                handleConfirmCompletion(finalOrder);
+                                            }}
+                                            className="flex-[2] py-4 bg-indigo-600 text-white rounded-xl font-black text-lg shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition transform active:scale-95"
+                                        >
+                                            🎉 접수 완료 및 양식 생성
+                                        </button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
-                </PopoutWindow>
-            )}
+                    </PopoutWindow>
+                )}
 
             {memoPopupTarget && (<div className="fixed inset-0 bg-black/40 flex justify-center items-center backdrop-blur-sm z-50"><div className="bg-white p-6 rounded-2xl w-[400px] border border-gray-200 shadow-2xl animate-fade-in-up"><h2 className="text-lg font-bold mb-3 text-indigo-800 border-b border-gray-100 pb-2">{memoFieldType === 'additional_info' ? '📝 후처리 메모' : '💬 상담 내용 메모'}</h2><textarea ref={memoInputRef} className="w-full h-40 bg-gray-50 p-4 rounded-xl border border-gray-300 text-sm text-gray-800 resize-none outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 transition" value={memoPopupText} onChange={e => setMemoPopupText(e.target.value)} placeholder="내용을 입력하세요..." /><div className="flex justify-end gap-2 mt-4"><button onClick={() => setMemoPopupTarget(null)} className="px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg font-bold transition">취소</button><button onClick={saveMemoPopup} className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-md transition">저장</button></div></div></div>)}
             {showResponseModal && responseTarget && (<div className="fixed inset-0 bg-black/40 flex justify-center items-center backdrop-blur-sm z-50"><div className="bg-white p-6 rounded-2xl w-[400px] border border-gray-200 shadow-2xl animate-fade-in-up"><h2 className="text-xl font-bold mb-4 text-indigo-900 border-b border-gray-100 pb-2 flex items-center gap-2">🔔 관리자 확인 요청</h2><div className="bg-yellow-50 p-4 rounded-xl border border-yellow-200 mb-6"><span className="text-xs font-bold text-yellow-700 block mb-1">요청 내용:</span><p className="text-sm text-gray-800 font-medium">{responseTarget.request_message || "내용 없음"}</p></div><div className="flex flex-col gap-3"><button onClick={() => handleResponse('PROCESSING')} className="w-full py-3 bg-blue-100 hover:bg-blue-200 text-blue-700 rounded-xl font-bold transition flex items-center justify-center gap-2">🚧 지금 확인 중입니다</button><button onClick={() => handleResponse('COMPLETED')} className="w-full py-3 bg-green-500 hover:bg-green-600 text-white rounded-xl font-bold shadow-md transition flex items-center justify-center gap-2">✅ 처리 완료했습니다</button></div><div className="mt-4 text-center"><button onClick={() => setShowResponseModal(false)} className="text-xs text-gray-400 hover:text-gray-600">닫기</button></div></div></div>)}
@@ -4716,249 +4615,281 @@ function AgentDashboard({ user, onLogout }) {
                 </div>
             )}
 
-            {isChatOpen && (
-                <PopoutWindow
-                    title="메시지 센터"
-                    onClose={() => setIsChatOpen(false)}
-                    width={1000}
-                    height={800}
-                    windowKey="samsung_messenger_v2"
-                >
-                    <div className="flex flex-row h-screen bg-white font-sans overflow-hidden text-gray-800">
-
-                        {/* ==========================================
-                [LEFT] 채팅방 목록 영역
-               ========================================== */}
-                        <div className="w-[320px] flex flex-col border-r border-gray-200 bg-white shrink-0">
-                            <div className="p-5 pb-3">
-                                <h2 className="text-2xl font-black text-gray-900 mb-4">메시지</h2>
-                                <div className="relative group">
-                                    <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
-                                    <input
-                                        type="text"
-                                        placeholder="이름 또는 번호 검색"
-                                        className="w-full bg-gray-100 rounded-2xl pl-10 pr-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
-                                        value={chatListSearch}
-                                        onChange={(e) => setChatListSearch(e.target.value)}
-                                    />
-                                </div>
+                {/* 🟢 [추가] 실패 사유 선택 모달 */}
+                {showFailModal && failTarget && (
+                    <div className="fixed inset-0 bg-black/50 z-[9999] flex justify-center items-center backdrop-blur-sm animate-fade-in">
+                        <div className="bg-white p-6 rounded-2xl w-96 border border-gray-200 shadow-2xl">
+                            <h3 className="text-xl font-bold text-red-600 mb-4 flex items-center gap-2">🚫 실패 처리</h3>
+                            <div className="bg-red-50 p-3 rounded-lg mb-4">
+                                <p className="text-sm text-gray-700 font-bold mb-1">{failTarget.name} 고객님</p>
+                                <p className="text-xs text-gray-500">실패 사유를 선택하면 'AS/실패' 탭으로 이동됩니다.</p>
                             </div>
-
-                            <div className="flex-1 overflow-y-auto custom-scrollbar">
-                                {chatListCustomers.map(c => (
-                                    <div
-                                        key={c.id}
-                                        onClick={() => { setChatTarget(c); fetchChatHistory(c.id); }}
-                                        className={`px-5 py-4 flex items-center gap-4 cursor-pointer transition-all relative
-                    ${chatTarget?.id === c.id ? 'bg-indigo-50 border-r-4 border-indigo-600' : 'hover:bg-gray-50 border-b border-gray-50'}`}
-                                    >
-                                        <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold shrink-0 shadow-sm ${chatTarget?.id === c.id ? 'bg-indigo-600' : 'bg-gray-300'}`}>
-                                            {c.name?.[0]}
-                                        </div>
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex justify-between items-center mb-0.5">
-                                                <span className={`truncate text-sm ${chatTarget?.id === c.id ? 'font-black' : 'font-bold'}`}>{c.name}</span>
-                                                <span className="text-[10px] text-gray-400">{c.upload_date?.substring(5)}</span>
-                                            </div>
-                                            <div className="text-xs text-gray-500 truncate">{c.last_memo || '대화 내용 없음'}</div>
-                                        </div>
-                                    </div>
-                                ))}
+                            <div className="mb-6">
+                                <label className="block text-sm font-bold text-gray-700 mb-2">실패 사유 선택</label>
+                                <select
+                                    className="w-full p-3 border border-gray-300 rounded-xl outline-none focus:border-red-500"
+                                    value={selectedFailReason}
+                                    onChange={(e) => setSelectedFailReason(e.target.value)}
+                                >
+                                    <option value="">-- 사유를 선택하세요 --</option>
+                                    {reasons.map((r) => (
+                                        <option key={r.id} value={r.reason}>{r.reason}</option>
+                                    ))}
+                                </select>
+                            </div>
+                            <div className="flex justify-end gap-2">
+                                <button onClick={() => { setShowFailModal(false); setFailTarget(null); }} className="px-4 py-2 bg-gray-100 text-gray-600 rounded-lg font-bold hover:bg-gray-200">취소</button>
+                                <button onClick={handleConfirmFail} className="px-4 py-2 bg-red-600 text-white rounded-lg font-bold hover:bg-red-700 shadow-md">확인 및 저장</button>
                             </div>
                         </div>
+                    </div>
+                )}
 
-                        {/* [RIGHT] 채팅방 상세 영역 */}
-                        <div className="flex-1 flex flex-col bg-[#F4F4F4] min-w-0 relative">
 
-                            {/* 1. 우측 통합 헤더 (채팅방 선택 여부와 상관없이 항상 노출) */}
-                            <div className="bg-white/90 backdrop-blur-md px-6 py-3 flex items-center justify-between border-b border-gray-200 shrink-0 z-30 shadow-sm">
-                                {/* (Left) 선택된 고객 정보 - chatTarget이 있을 때만 표시 */}
-                                <div className="flex items-center gap-3 w-1/3 min-h-[40px]">
-                                    {chatTarget ? (
-                                        <>
-                                            <div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold shadow-sm">
-                                                {chatTarget.name?.[0]}
-                                            </div>
-                                            <div className="min-w-0">
-                                                <div className="font-black text-gray-900 truncate text-sm">{chatTarget.name}</div>
-                                                <div className="text-[10px] text-indigo-500 font-bold">{chatTarget.phone}</div>
-                                            </div>
-                                        </>
-                                    ) : (
-                                        <div className="flex items-center gap-2 text-gray-400">
-                                            <span className="text-sm font-bold italic">대화 상대를 선택하세요</span>
-                                        </div>
-                                    )}
-                                </div>
+                {isChatOpen && (
+                    <PopoutWindow
+                        title="메시지 센터"
+                        onClose={() => setIsChatOpen(false)}
+                        width={1000}
+                        height={800}
+                        windowKey="samsung_messenger_v2"
+                        trigger={chatTrigger}
+                    >
+                        <div className="flex flex-row h-screen bg-white font-sans overflow-hidden text-gray-800">
 
-                                {/* (Center) ⭐️ 핵심: 검색 및 새 번호 입력바 (항상 노출) */}
-                                <div className="flex-1 max-w-sm px-4">
+                            {/* ==========================================
+                [LEFT] 채팅방 목록 영역
+               ========================================== */}
+                            <div className="w-[320px] flex flex-col border-r border-gray-200 bg-white shrink-0">
+                                <div className="p-5 pb-3">
+                                    <h2 className="text-2xl font-black text-gray-900 mb-4">메시지</h2>
                                     <div className="relative group">
-                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">
-                                            {/* 번호 패턴이면 아이콘 변경 */}
-                                            {/^01[0-9]/.test(chatListSearch.replace(/[^0-9]/g, '')) ? '📱' : '🔍'}
-                                        </span>
+                                        <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400">🔍</span>
                                         <input
                                             type="text"
-                                            placeholder="내용 검색 또는 새 번호 입력 후 Enter"
-                                            className={`w-full rounded-xl pl-9 pr-4 py-2 text-xs outline-none transition-all border-2 
-            ${/^01[0-9]/.test(chatListSearch.replace(/[^0-9]/g, ''))
-                                                    ? 'border-indigo-400 bg-white ring-4 ring-indigo-50'
-                                                    : 'border-transparent bg-gray-100 focus:bg-white focus:ring-2 focus:ring-indigo-100'}`}
+                                            placeholder="이름 또는 번호 검색"
+                                            className="w-full bg-gray-100 rounded-2xl pl-10 pr-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-indigo-100 transition-all"
                                             value={chatListSearch}
                                             onChange={(e) => setChatListSearch(e.target.value)}
-                                            onKeyDown={handleSearchEnter} // 서버와 연동한 함수
                                         />
                                     </div>
                                 </div>
 
-                                {/* (Right) 헤더 우측 메뉴 */}
-                                <div className="flex items-center justify-end gap-1 w-1/3">
-                                    {chatTarget && (
-                                        <button
-                                            onClick={() => setShowMacro(!showMacro)}
-                                            className={`text-[11px] font-bold px-3 py-1.5 rounded-full border transition-all mr-1
-            ${showMacro ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'}`}
+                                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                                    {chatListCustomers.map(c => (
+                                        <div
+                                            key={c.id}
+                                            onClick={() => { setChatTarget(c); fetchChatHistory(c.id); }}
+                                            className={`px-5 py-4 flex items-center gap-4 cursor-pointer transition-all relative
+                    ${chatTarget?.id === c.id ? 'bg-indigo-50 border-r-4 border-indigo-600' : 'hover:bg-gray-50 border-b border-gray-50'}`}
                                         >
-                                            문구
-                                        </button>
-                                    )}
-
-                                    <div className="relative">
-                                        <button
-                                            onClick={() => setShowResponseModal(!showResponseModal)}
-                                            className={`w-9 h-9 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors ${showResponseModal ? 'bg-gray-100 text-gray-900' : 'text-gray-400'}`}
-                                        >
-                                            <span className="text-xl font-bold">⋮</span>
-                                        </button>
-
-                                        {showResponseModal && (
-                                            <div className="absolute right-0 top-11 w-44 bg-white rounded-2xl shadow-2xl border border-gray-100 py-1.5 z-50 animate-fade-in-down">
-                                                <button
-                                                    onClick={() => { setChatTarget(null); setShowResponseModal(false); }}
-                                                    className="w-full text-left px-4 py-2.5 text-[13px] text-red-500 font-bold hover:bg-red-50 flex items-center gap-2 transition-colors"
-                                                >
-                                                    <span>🚪</span> 채팅방 나가기
-                                                </button>
-                                                <button
-                                                    onClick={() => setShowResponseModal(false)}
-                                                    className="w-full text-left px-4 py-2.5 text-[13px] text-gray-500 hover:bg-gray-50 transition-colors"
-                                                >
-                                                    취소
-                                                </button>
+                                            <div className={`w-12 h-12 rounded-full flex items-center justify-center text-white font-bold shrink-0 shadow-sm ${chatTarget?.id === c.id ? 'bg-indigo-600' : 'bg-gray-300'}`}>
+                                                {c.name?.[0]}
                                             </div>
-                                        )}
-                                    </div>
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex justify-between items-center mb-0.5">
+                                                    <span className={`truncate text-sm ${chatTarget?.id === c.id ? 'font-black' : 'font-bold'}`}>{c.name}</span>
+                                                    <span className="text-[10px] text-gray-400">{c.upload_date?.substring(5)}</span>
+                                                </div>
+                                                <div className="text-xs text-gray-500 truncate">{c.last_memo || '대화 내용 없음'}</div>
+                                            </div>
+                                        </div>
+                                    ))}
                                 </div>
                             </div>
 
-                            {/* 2. 하단 컨텐츠 영역 (메시지 리스트 및 입력창) */}
-                            {chatTarget ? (
-                                // 🟢 flex-1과 h-full을 주어 부모의 남은 높이를 꽉 채우도록 설정
-                                <div className="flex-1 flex flex-col min-h-0 relative"
-                                    onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
-                                    onDragLeave={() => setIsDragOver(false)}
-                                    onDrop={handleFileDrop}>
+                            {/* [RIGHT] 채팅방 상세 영역 */}
+                            <div className="flex-1 flex flex-col bg-[#F4F4F4] min-w-0 relative">
 
-                                    {/* 🟢 메시지 리스트 창: flex-1과 overflow-y-auto로 이 구역만 스크롤되게 고정 */}
-                                    <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-[#F4F4F4]" ref={chatScrollRef}>
-                                        {chatMessages.map((msg, idx) => (
-                                            <div key={msg.id || idx} className={`flex ${msg.sender === 'me' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}>
-                                                <div className="flex flex-col max-w-[75%]">
-                                                    <div className={`px-4 py-2.5 text-sm shadow-sm relative transition-all leading-relaxed
-                            ${msg.sender === 'me'
-                                                            ? 'bg-indigo-600 text-white rounded-[20px] rounded-tr-none'
-                                                            : 'bg-white text-gray-800 rounded-[20px] rounded-tl-none border border-gray-200'}`}>
-                                                        <div className="whitespace-pre-wrap">{msg.text}</div>
-                                                        {msg.image && <img src={msg.image} alt="첨부" className="mt-2 rounded-lg max-w-full border border-gray-100" />}
-                                                    </div>
-                                                    <span className={`text-[10px] text-gray-400 mt-1 px-1 ${msg.sender === 'me' ? 'text-right' : 'text-left'}`}>
-                                                        {msg.created_at}
-                                                    </span>
+                                {/* 1. 우측 통합 헤더 (채팅방 선택 여부와 상관없이 항상 노출) */}
+                                <div className="bg-white/90 backdrop-blur-md px-6 py-3 flex items-center justify-between border-b border-gray-200 shrink-0 z-30 shadow-sm">
+                                    {/* (Left) 선택된 고객 정보 - chatTarget이 있을 때만 표시 */}
+                                    <div className="flex items-center gap-3 w-1/3 min-h-[40px]">
+                                        {chatTarget ? (
+                                            <>
+                                                <div className="w-10 h-10 bg-indigo-600 rounded-full flex items-center justify-center text-white font-bold shadow-sm">
+                                                    {chatTarget.name?.[0]}
                                                 </div>
+                                                <div className="min-w-0">
+                                                    <div className="font-black text-gray-900 truncate text-sm">{chatTarget.name}</div>
+                                                    <div className="text-[10px] text-indigo-500 font-bold">{chatTarget.phone}</div>
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <div className="flex items-center gap-2 text-gray-400">
+                                                <span className="text-sm font-bold italic">대화 상대를 선택하세요</span>
                                             </div>
-                                        ))}
+                                        )}
                                     </div>
 
-                                    {/* [수정] 붙여넣은 이미지 미리보기 표시 */}
-                                    {chatFile && (
-                                        <div className="px-4 py-2 bg-indigo-50 border-t border-indigo-100 flex justify-between items-center animate-fade-in shrink-0">
-                                            <div className="flex items-center gap-3">
-                                                {/* 🟢 실제 이미지 썸네일 추가 */}
-                                                <div className="w-10 h-10 rounded border border-indigo-200 overflow-hidden bg-white">
-                                                    <img
-                                                        src={URL.createObjectURL(chatFile)}
-                                                        alt="pasted"
-                                                        className="w-full h-full object-cover"
-                                                    />
-                                                </div>
-                                                <div className="flex flex-col">
-                                                    <span className="text-xs font-bold text-indigo-700 truncate max-w-[200px]">{chatFile.name}</span>
-                                                    <span className="text-[10px] text-indigo-400">전송 버튼을 누르면 이미지와 텍스트가 함께 발송됩니다.</span>
-                                                </div>
-                                            </div>
-                                            <button
-                                                onClick={() => setChatFile(null)}
-                                                className="text-gray-400 hover:text-red-500 font-bold px-2 text-lg"
-                                            >
-                                                ✕
-                                            </button>
+                                    {/* (Center) ⭐️ 핵심: 검색 및 새 번호 입력바 (항상 노출) */}
+                                    <div className="flex-1 max-w-sm px-4">
+                                        <div className="relative group">
+                                            <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 text-xs">
+                                                {/* 번호 패턴이면 아이콘 변경 */}
+                                                {/^01[0-9]/.test(chatListSearch.replace(/[^0-9]/g, '')) ? '📱' : '🔍'}
+                                            </span>
+                                            <input
+                                                type="text"
+                                                placeholder="내용 검색 또는 새 번호 입력 후 Enter"
+                                                className={`w-full rounded-xl pl-9 pr-4 py-2 text-xs outline-none transition-all border-2 
+            ${/^01[0-9]/.test(chatListSearch.replace(/[^0-9]/g, ''))
+                                                        ? 'border-indigo-400 bg-white ring-4 ring-indigo-50'
+                                                        : 'border-transparent bg-gray-100 focus:bg-white focus:ring-2 focus:ring-indigo-100'}`}
+                                                value={chatListSearch}
+                                                onChange={(e) => setChatListSearch(e.target.value)}
+                                                onKeyDown={handleSearchEnter} // 서버와 연동한 함수
+                                            />
                                         </div>
-                                    )}
+                                    </div>
 
-                                    {/* 🟢 하단 입력창 구역: shrink-0을 주어 메시지 창이 길어져도 절대 밀려나지 않게 고정 */}
-                                    <div className="p-4 bg-white border-t border-gray-200 shrink-0">
-                                        <div className="max-w-4xl mx-auto flex items-end gap-2 bg-[#F0F2F5] rounded-[26px] p-2">
-                                            <label htmlFor="chat-file-input" className="p-2 cursor-pointer text-gray-500 hover:text-indigo-600 shrink-0">
-                                                <span className="text-2xl">📎</span>
-                                                <input type="file" id="chat-file-input" className="hidden" accept="image/*" onChange={(e) => setChatFile(e.target.files[0])} />
-                                            </label>
+                                    {/* (Right) 헤더 우측 메뉴 */}
+                                    <div className="flex items-center justify-end gap-1 w-1/3">
+                                        {chatTarget && (
+                                            <button
+                                                onClick={() => setShowMacro(!showMacro)}
+                                                className={`text-[11px] font-bold px-3 py-1.5 rounded-full border transition-all mr-1
+            ${showMacro ? 'bg-indigo-600 text-white border-indigo-600 shadow-md' : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'}`}
+                                            >
+                                                문구
+                                            </button>
+                                        )}
 
-                                            <textarea
-                                                className="flex-1 bg-transparent rounded-xl px-2 py-3 text-sm outline-none resize-none leading-relaxed custom-scrollbar overflow-y-auto"
-                                                placeholder="메시지를 입력하세요..."
-                                                value={chatInput}
-                                                style={{ height: '48px', minHeight: '48px', maxHeight: '48px' }}
-                                                onChange={(e) => setChatInput(e.target.value)}
-                                                onKeyDown={handleChatKeyDown}
-                                                // 🟢 [추가] 클립보드 붙여넣기 핸들러 연결
-                                                onPaste={(e) => {
-                                                    const items = e.clipboardData.items;
-                                                    for (let i = 0; i < items.length; i++) {
-                                                        if (items[i].type.indexOf('image') !== -1) {
-                                                            const file = items[i].getAsFile();
-                                                            if (file) {
-                                                                // 파일명을 임의로 생성하여 세팅
-                                                                const namedFile = new File([file], `pasted_img_${Date.now()}.png`, { type: file.type });
-                                                                setChatFile(namedFile);
-                                                                e.preventDefault(); // 텍스트 영역에 이상한 문자가 들어가는 것 방지
+                                        <div className="relative">
+                                            <button
+                                                onClick={() => setShowResponseModal(!showResponseModal)}
+                                                className={`w-9 h-9 flex items-center justify-center rounded-full hover:bg-gray-100 transition-colors ${showResponseModal ? 'bg-gray-100 text-gray-900' : 'text-gray-400'}`}
+                                            >
+                                                <span className="text-xl font-bold">⋮</span>
+                                            </button>
+
+                                            {showResponseModal && (
+                                                <div className="absolute right-0 top-11 w-44 bg-white rounded-2xl shadow-2xl border border-gray-100 py-1.5 z-50 animate-fade-in-down">
+                                                    <button
+                                                        onClick={() => { setChatTarget(null); setShowResponseModal(false); }}
+                                                        className="w-full text-left px-4 py-2.5 text-[13px] text-red-500 font-bold hover:bg-red-50 flex items-center gap-2 transition-colors"
+                                                    >
+                                                        <span>🚪</span> 채팅방 나가기
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setShowResponseModal(false)}
+                                                        className="w-full text-left px-4 py-2.5 text-[13px] text-gray-500 hover:bg-gray-50 transition-colors"
+                                                    >
+                                                        취소
+                                                    </button>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* 2. 하단 컨텐츠 영역 (메시지 리스트 및 입력창) */}
+                                {chatTarget ? (
+                                    // 🟢 flex-1과 h-full을 주어 부모의 남은 높이를 꽉 채우도록 설정
+                                    <div className="flex-1 flex flex-col min-h-0 relative"
+                                        onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+                                        onDragLeave={() => setIsDragOver(false)}
+                                        onDrop={handleFileDrop}>
+
+                                        {/* 🟢 메시지 리스트 창: flex-1과 overflow-y-auto로 이 구역만 스크롤되게 고정 */}
+                                        <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-[#F4F4F4]" ref={chatScrollRef}>
+                                            {chatMessages.map((msg, idx) => (
+                                                <div key={msg.id || idx} className={`flex ${msg.sender === 'me' ? 'justify-end' : 'justify-start'} animate-fade-in-up`}>
+                                                    <div className="flex flex-col max-w-[75%]">
+                                                        <div className={`px-4 py-2.5 text-sm shadow-sm relative transition-all leading-relaxed
+                            ${msg.sender === 'me'
+                                                                ? 'bg-indigo-600 text-white rounded-[20px] rounded-tr-none'
+                                                                : 'bg-white text-gray-800 rounded-[20px] rounded-tl-none border border-gray-200'}`}>
+                                                            <div className="whitespace-pre-wrap">{msg.text}</div>
+                                                            {msg.image && <img src={msg.image} alt="첨부" className="mt-2 rounded-lg max-w-full border border-gray-100" />}
+                                                        </div>
+                                                        <span className={`text-[10px] text-gray-400 mt-1 px-1 ${msg.sender === 'me' ? 'text-right' : 'text-left'}`}>
+                                                            {msg.created_at}
+                                                        </span>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+
+                                        {/* [수정] 붙여넣은 이미지 미리보기 표시 */}
+                                        {chatFile && (
+                                            <div className="px-4 py-2 bg-indigo-50 border-t border-indigo-100 flex justify-between items-center animate-fade-in shrink-0">
+                                                <div className="flex items-center gap-3">
+                                                    {/* 🟢 실제 이미지 썸네일 추가 */}
+                                                    <div className="w-10 h-10 rounded border border-indigo-200 overflow-hidden bg-white">
+                                                        <img
+                                                            src={URL.createObjectURL(chatFile)}
+                                                            alt="pasted"
+                                                            className="w-full h-full object-cover"
+                                                        />
+                                                    </div>
+                                                    <div className="flex flex-col">
+                                                        <span className="text-xs font-bold text-indigo-700 truncate max-w-[200px]">{chatFile.name}</span>
+                                                        <span className="text-[10px] text-indigo-400">전송 버튼을 누르면 이미지와 텍스트가 함께 발송됩니다.</span>
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    onClick={() => setChatFile(null)}
+                                                    className="text-gray-400 hover:text-red-500 font-bold px-2 text-lg"
+                                                >
+                                                    ✕
+                                                </button>
+                                            </div>
+                                        )}
+
+                                        {/* 🟢 하단 입력창 구역: shrink-0을 주어 메시지 창이 길어져도 절대 밀려나지 않게 고정 */}
+                                        <div className="p-4 bg-white border-t border-gray-200 shrink-0">
+                                            <div className="max-w-4xl mx-auto flex items-end gap-2 bg-[#F0F2F5] rounded-[26px] p-2">
+                                                <label htmlFor="chat-file-input" className="p-2 cursor-pointer text-gray-500 hover:text-indigo-600 shrink-0">
+                                                    <span className="text-2xl">📎</span>
+                                                    <input type="file" id="chat-file-input" className="hidden" accept="image/*" onChange={(e) => setChatFile(e.target.files[0])} />
+                                                </label>
+
+                                                <textarea
+                                                    className="flex-1 bg-transparent rounded-xl px-2 py-3 text-sm outline-none resize-none leading-relaxed custom-scrollbar overflow-y-auto"
+                                                    placeholder="메시지를 입력하세요..."
+                                                    value={chatInput}
+                                                    style={{ height: '48px', minHeight: '48px', maxHeight: '48px' }}
+                                                    onChange={(e) => setChatInput(e.target.value)}
+                                                    onKeyDown={handleChatKeyDown}
+                                                    // 🟢 [추가] 클립보드 붙여넣기 핸들러 연결
+                                                    onPaste={(e) => {
+                                                        const items = e.clipboardData.items;
+                                                        for (let i = 0; i < items.length; i++) {
+                                                            if (items[i].type.indexOf('image') !== -1) {
+                                                                const file = items[i].getAsFile();
+                                                                if (file) {
+                                                                    // 파일명을 임의로 생성하여 세팅
+                                                                    const namedFile = new File([file], `pasted_img_${Date.now()}.png`, { type: file.type });
+                                                                    setChatFile(namedFile);
+                                                                    e.preventDefault(); // 텍스트 영역에 이상한 문자가 들어가는 것 방지
+                                                                }
                                                             }
                                                         }
-                                                    }
-                                                }}
-                                            />
+                                                    }}
+                                                />
 
-                                            <button
-                                                onClick={() => handleSendManualChat()}
-                                                disabled={isSending || (!chatInput.trim() && !chatFile)}
-                                                className="w-11 h-11 rounded-full bg-indigo-600 text-white flex justify-center items-center shrink-0 shadow-lg disabled:bg-gray-300"
-                                            >
-                                                {isSending ? "⏳" : "▲"}
-                                            </button>
+                                                <button
+                                                    onClick={() => handleSendManualChat()}
+                                                    disabled={isSending || (!chatInput.trim() && !chatFile)}
+                                                    className="w-11 h-11 rounded-full bg-indigo-600 text-white flex justify-center items-center shrink-0 shadow-lg disabled:bg-gray-300"
+                                                >
+                                                    {isSending ? "⏳" : "▲"}
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
-                                </div>
-                            ) : (
-                                /* [DEFAULT] 채팅방 미선택 시 화면 */
-                                <div className="flex-1 flex flex-col items-center justify-center text-gray-400 bg-slate-50">
-                                    <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center text-6xl mb-6 opacity-30 grayscale">💬</div>
-                                    <p className="font-black text-xl text-gray-400">대화할 상대를 선택하거나 번호를 입력하세요</p>
-                                    <p className="text-sm mt-2 opacity-60 text-center">상단 검색바에 전화번호를 입력하고 엔터를 누르면<br />새로운 채팅방이 생성됩니다.</p>
-                                </div>
-                            )}
+                                ) : (
+                                    /* [DEFAULT] 채팅방 미선택 시 화면 */
+                                    <div className="flex-1 flex flex-col items-center justify-center text-gray-400 bg-slate-50">
+                                        <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center text-6xl mb-6 opacity-30 grayscale">💬</div>
+                                        <p className="font-black text-xl text-gray-400">대화할 상대를 선택하거나 번호를 입력하세요</p>
+                                        <p className="text-sm mt-2 opacity-60 text-center">상단 검색바에 전화번호를 입력하고 엔터를 누르면<br />새로운 채팅방이 생성됩니다.</p>
+                                    </div>
+                                )}
+                            </div>
                         </div>
-                    </div>
-                </PopoutWindow>
+                    </PopoutWindow>
                 )}
 
 
@@ -5147,43 +5078,43 @@ function AgentDashboard({ user, onLogout }) {
                 )}
 
 
-            {/* 🟢 [추가] 상담 메모 히스토리 모달 (읽기 전용) */}
-            {showHistoryModal && (
-                <div className="fixed inset-0 bg-black/50 z-[9999] flex justify-center items-center backdrop-blur-sm animate-fade-in">
-                    <div className="bg-white p-6 rounded-2xl w-[500px] border border-gray-200 shadow-2xl flex flex-col max-h-[70vh]">
-                        <div className="flex justify-between items-center mb-4 border-b border-gray-100 pb-3">
-                            <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
-                                📖 {historyTargetName}님 상담 기록
-                            </h3>
-                            <button onClick={() => setShowHistoryModal(false)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
-                        </div>
+                {/* 🟢 [추가] 상담 메모 히스토리 모달 (읽기 전용) */}
+                {showHistoryModal && (
+                    <div className="fixed inset-0 bg-black/50 z-[9999] flex justify-center items-center backdrop-blur-sm animate-fade-in">
+                        <div className="bg-white p-6 rounded-2xl w-[500px] border border-gray-200 shadow-2xl flex flex-col max-h-[70vh]">
+                            <div className="flex justify-between items-center mb-4 border-b border-gray-100 pb-3">
+                                <h3 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                                    📖 {historyTargetName}님 상담 기록
+                                </h3>
+                                <button onClick={() => setShowHistoryModal(false)} className="text-gray-400 hover:text-gray-600 text-lg">✕</button>
+                            </div>
 
-                        <div className="flex-1 overflow-y-auto custom-scrollbar p-2 bg-gray-50 rounded-xl space-y-3">
-                            {historyData.length === 0 ? (
-                                <p className="text-center text-gray-400 text-sm py-10">기록된 상담 내용이 없습니다.</p>
-                            ) : (
-                                historyData.map((log, idx) => (
-                                    <div key={idx} className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
-                                        <div className="flex justify-between items-start mb-1">
-                                            <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">
-                                                {log.user_name || '시스템'}
-                                            </span>
-                                            <span className="text-[10px] text-gray-400">{new Date(log.created_at).toLocaleString()}</span>
+                            <div className="flex-1 overflow-y-auto custom-scrollbar p-2 bg-gray-50 rounded-xl space-y-3">
+                                {historyData.length === 0 ? (
+                                    <p className="text-center text-gray-400 text-sm py-10">기록된 상담 내용이 없습니다.</p>
+                                ) : (
+                                    historyData.map((log, idx) => (
+                                        <div key={idx} className="bg-white p-3 rounded-lg border border-gray-200 shadow-sm">
+                                            <div className="flex justify-between items-start mb-1">
+                                                <span className="text-[11px] font-bold text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded">
+                                                    {log.user_name || '시스템'}
+                                                </span>
+                                                <span className="text-[10px] text-gray-400">{new Date(log.created_at).toLocaleString()}</span>
+                                            </div>
+                                            <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                                                {log.content}
+                                            </p>
                                         </div>
-                                        <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
-                                            {log.content}
-                                        </p>
-                                    </div>
-                                ))
-                            )}
-                        </div>
+                                    ))
+                                )}
+                            </div>
 
-                        <div className="mt-4 text-center">
-                            <p className="text-xs text-red-400">※ 히스토리는 수정 및 삭제가 불가능합니다.</p>
+                            <div className="mt-4 text-center">
+                                <p className="text-xs text-red-400">※ 히스토리는 수정 및 삭제가 불가능합니다.</p>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )}
 
             {/* 🟢 [수정완료] 고객 등록 모달 (슬림 엑셀 시트형 + 직접 붙여넣기) */}
             {showUploadModal && (
@@ -5351,7 +5282,92 @@ function AgentDashboard({ user, onLogout }) {
                         </div>
                     </div>
                 </div>
-            )}
+                )}
+
+                {/* 🟢 [수정됨] 접수 취소 사유 선택 모달 */}
+                {showCancelModal && cancelTarget && (
+                    <div className="fixed inset-0 bg-black/50 z-[9999] flex justify-center items-center backdrop-blur-sm animate-fade-in">
+                        <div className="bg-white p-6 rounded-2xl w-[450px] border border-gray-200 shadow-2xl flex flex-col gap-4">
+
+                            {/* 헤더 */}
+                            <div className="border-b border-gray-100 pb-3">
+                                <h3 className="text-xl font-bold text-red-600 flex items-center gap-2">
+                                    🚫 접수 취소 처리
+                                </h3>
+                                <div className="mt-2 text-sm text-gray-600 bg-gray-50 p-2 rounded-lg">
+                                    <p><span className="font-bold">고객명:</span> {cancelTarget.name}</p>
+                                    <p><span className="font-bold">연락처:</span> {cancelTarget.phone}</p>
+                                </div>
+                            </div>
+
+                            {/* 입력 폼 영역 */}
+                            <div className="flex flex-col gap-4">
+
+                                {/* 1. 사유 선택 */}
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">취소 사유 선택 (필수)</label>
+                                    <select
+                                        className="w-full p-3 border border-gray-300 rounded-lg outline-none focus:border-red-500 text-sm font-bold text-gray-700"
+                                        value={selectedCancelReason}
+                                        onChange={(e) => setSelectedCancelReason(e.target.value)}
+                                    >
+                                        <option value="">-- 사유를 선택하세요 --</option>
+                                        {(cancelReasons || []).map((r) => (
+                                            <option key={r.id} value={r.reason}>{r.reason}</option>
+                                        ))}
+                                    </select>
+                                </div>
+
+                                {/* 2. 메모 작성 */}
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 mb-1">취소 메모 (선택)</label>
+                                    <textarea
+                                        className="w-full p-3 border border-gray-300 rounded-lg outline-none focus:border-red-500 text-sm resize-none h-20"
+                                        placeholder="특이사항이나 사유를 상세히 적어주세요."
+                                        value={cancelMemo}
+                                        onChange={(e) => setCancelMemo(e.target.value)}
+                                    />
+                                </div>
+
+                                {/* 3. 가망 이동 옵션 */}
+                                <label className="flex items-center gap-2 cursor-pointer bg-indigo-50 p-3 rounded-lg border border-indigo-100 hover:bg-indigo-100 transition">
+                                    <input
+                                        type="checkbox"
+                                        className="w-5 h-5 accent-indigo-600"
+                                        checked={isMoveToPotential}
+                                        onChange={(e) => setIsMoveToPotential(e.target.checked)}
+                                    />
+                                    <div className="flex flex-col">
+                                        <span className="text-sm font-bold text-indigo-900">가망 관리로 이동</span>
+                                        <span className="text-[10px] text-indigo-500">체크 시 '접수취소' 대신 '가망' 상태로 변경됩니다.</span>
+                                    </div>
+                                </label>
+                            </div>
+
+                            {/* 버튼 영역 */}
+                            <div className="flex justify-end gap-2 mt-2 pt-3 border-t border-gray-100">
+                                <button
+                                    onClick={() => {
+                                        setShowCancelModal(false);
+                                        setCancelTarget(null);
+                                        setCancelMemo('');
+                                        setIsMoveToPotential(false);
+                                    }}
+                                    className="px-4 py-2.5 bg-gray-100 text-gray-600 rounded-xl font-bold hover:bg-gray-200 transition text-sm"
+                                >
+                                    닫기
+                                </button>
+                                <button
+                                    onClick={handleConfirmCancel}
+                                    className="px-6 py-2.5 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 shadow-md transition flex items-center gap-2 text-sm"
+                                >
+                                    <span>확인 및 저장</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
 
             {/* 🟢 [수정완료] 정책표 뷰어 (이미지 경로 자동 보정 및 레이아웃 최적화) */}
             {showPolicyViewer && (
@@ -5415,52 +5431,47 @@ function AgentDashboard({ user, onLogout }) {
                                         ))}
                                     </div>
 
-                                    {/* 1658라인 위치: 여기를 아래 코드로 교체 */}
-                                    <div className="flex-1 overflow-y-auto p-8 bg-slate-200/50 custom-scrollbar flex flex-col items-center gap-12">
-                                        {(() => {
-                                            const rawData = policyImages[viewerPlatform];
-                                            const imageList = Array.isArray(rawData) ? rawData : [];
+                                        {/* 🖼️ 정책표 탭 내용 부분 교체 */}
+                                        <div className="flex-1 overflow-y-auto p-8 bg-slate-200/50 custom-scrollbar flex flex-col items-center gap-12">
+                                            {(() => {
+                                                const rawData = policyImages[viewerPlatform];
+                                                const imageList = Array.isArray(rawData) ? rawData : (rawData ? [rawData] : []);
 
-                                            return imageList.length > 0 ? (
-                                                imageList.map((imgObj, index) => {
-                                                    // 데이터가 {id: 1, url: '...'} 형태인지 확인
-                                                    const isObject = typeof imgObj === 'object' && imgObj !== null;
-                                                    const imageId = isObject ? imgObj.id : null;
-                                                    const imageUrl = isObject ? imgObj.url : imgObj;
+                                                return imageList.length > 0 ? (
+                                                    imageList.map((imgObj, index) => {
+                                                        const isObject = typeof imgObj === 'object' && imgObj !== null;
+                                                        const imageId = isObject ? imgObj.id : null;
+                                                        const imageUrl = isObject ? imgObj.url : imgObj;
+                                                        const fullUrl = imageUrl.startsWith('http') ? imageUrl : `${API_BASE}${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`;
 
-                                                    const fullUrl = imageUrl.startsWith('http')
-                                                        ? imageUrl
-                                                        : `${API_BASE}${imageUrl.startsWith('/') ? '' : '/'}${imageUrl}`;
+                                                        return (
+                                                            <div key={imageId || index} className="relative group max-w-5xl w-full mb-10">
+                                                                {/* 상단 툴바 (이름 및 삭제 버튼) */}
+                                                                <div className="absolute -top-9 left-0 right-0 flex justify-between items-end px-1">
+                                                                    <span className="bg-white px-3 py-1 rounded-t-lg border-t border-l border-r border-gray-300 text-[11px] font-bold text-gray-500 shadow-sm">
+                                                                        📄 {viewerPlatform} 정책서 #{index + 1}
+                                                                    </span>
+                                                                </div>
 
-                                                    return (
-                                                        <div key={imageId || index} className="relative group max-w-5xl w-full mb-10">
-                                                            {/* 🔴 삭제 버튼이 포함된 상단 바 */}
-                                                            <div className="absolute -top-9 left-0 right-0 flex justify-between items-end px-1">
-                                                                <span className="bg-white px-3 py-1 rounded-t-lg border-t border-l border-r border-gray-300 text-[11px] font-bold text-gray-500 shadow-sm">
-                                                                    📄 {viewerPlatform} 정책서 #{index + 1}
-                                                                </span>
+                                                                {/* 이미지 카드 (클릭 시 확대) */}
+                                                                <div className="relative shadow-2xl rounded-b-2xl overflow-hidden border-4 border-white bg-white cursor-zoom-in">
+                                                                    <img
+                                                                        src={fullUrl}
+                                                                        alt="정책"
+                                                                        className="w-full h-auto transition-transform duration-500 group-hover:scale-[1.01]"
+                                                                        onClick={() => { setZoomImg(fullUrl); setZoomScale(1); }}
+                                                                    />
+                                                                </div>
                                                             </div>
-
-                                                            {/* 이미지 카드 */}
-                                                            <div className="relative cursor-zoom-in shadow-2xl rounded-b-2xl overflow-hidden border-4 border-white bg-white">
-                                                                <img
-                                                                    src={fullUrl}
-                                                                    alt="정책"
-                                                                    className="w-full h-auto transition-transform duration-500 group-hover:scale-[1.01]"
-                                                                    onClick={() => setZoomImg(fullUrl)}
-                                                                />
-                                                            </div>
-                                                        </div>
-                                                    );
-                                                })
-                                            ) : (
-                                                <div className="flex-1 flex flex-col items-center justify-center text-gray-400 py-32">
-                                                    <div className="w-24 h-24 bg-gray-200 rounded-full flex items-center justify-center text-5xl mb-6 grayscale opacity-50 shadow-inner">🖼️</div>
-                                                    <p className="text-xl font-black text-gray-500">등록된 '{viewerPlatform}' 정책이 없습니다.</p>
-                                                </div>
-                                            );
-                                        })()}
-                                    </div>
+                                                        );
+                                                    })
+                                                ) : (
+                                                    <div className="flex-1 flex flex-col items-center justify-center text-gray-400 py-32">
+                                                        <p className="text-xl font-black">등록된 정책이 없습니다.</p>
+                                                    </div>
+                                                );
+                                            })()}
+                                        </div>
                                 </div>
                             )}
 
@@ -5527,133 +5538,228 @@ function AgentDashboard({ user, onLogout }) {
                                 </div>
                             )}
 
-                            {/* [C] 이미지 확대 레이어 */}
-                            {zoomImg && (
-                                <div
-                                    className="fixed inset-0 z-[100] bg-black/95 backdrop-blur-md flex justify-center items-center p-4 animate-fade-in"
-                                    onClick={() => setZoomImg(null)}
-                                >
-                                    <div className="relative max-w-full max-h-full flex flex-col items-center">
-                                        <img
-                                            src={zoomImg}
-                                            alt="확대보기"
-                                            className="max-w-full max-h-[85vh] object-contain shadow-2xl rounded-lg scale-100"
-                                            onClick={(e) => e.stopPropagation()}
-                                        />
-                                        <div className="mt-6 flex gap-4">
-                                            <button
-                                                onClick={() => window.open(zoomImg, '_blank')}
-                                                className="bg-white/10 hover:bg-white/20 text-white px-8 py-3 rounded-xl font-bold border border-white/20 transition shadow-xl"
-                                            >
-                                                💾 원본 보기 / 다운로드
-                                            </button>
-                                            <button
-                                                onClick={() => setZoomImg(null)}
-                                                className="bg-indigo-600 hover:bg-indigo-700 text-white px-12 py-3 rounded-xl font-black shadow-2xl transition transform active:scale-95"
-                                            >
-                                                닫기 (ESC)
-                                            </button>
+                                {/* 🔍 이미지 확대 레이어 (휠 줌 기능 포함) */}
+                                {zoomImg && (
+                                    <div
+                                        className="fixed inset-0 z-[200] bg-black/90 backdrop-blur-md flex flex-col justify-center items-center p-4 animate-fade-in overflow-hidden"
+                                        onWheel={(e) => {
+                                            setZoomScale(prev => {
+                                                const next = prev + (e.deltaY > 0 ? -0.2 : 0.2);
+                                                return Math.min(Math.max(next, 0.5), 5);
+                                            });
+                                        }}
+                                        onClick={() => { setZoomImg(null); setZoomScale(1); }}
+                                    >
+                                        <div className="relative flex justify-center items-center transition-transform duration-200 ease-out"
+                                            style={{ transform: `scale(${zoomScale})` }}
+                                            onClick={(e) => e.stopPropagation()}>
+                                            <img src={zoomImg} alt="확대보기" className="max-w-[90vw] max-h-[85vh] object-contain shadow-2xl rounded-lg border-4 border-white/10" />
+                                        </div>
+                                        <div className="absolute bottom-10 flex gap-4 z-[210]">
+                                            <button onClick={() => window.open(zoomImg, '_blank')} className="bg-white/10 text-white px-8 py-3 rounded-xl font-bold border border-white/20">원본 보기</button>
+                                            <button onClick={() => { setZoomImg(null); setZoomScale(1); }} className="bg-indigo-600 text-white px-12 py-3 rounded-xl font-black shadow-2xl">닫기 (ESC)</button>
                                         </div>
                                     </div>
-                                </div>
-                            )}
+                                )}
+
+                                {/* ⚠️ 정책 삭제 확인 모달 */}
+                                {policyDeleteTarget && (
+                                    <div className="fixed inset-0 z-[220] bg-black/60 flex justify-center items-center backdrop-blur-sm animate-fade-in">
+                                        <div className="bg-white p-8 rounded-[32px] w-[380px] text-center shadow-2xl border border-gray-100">
+                                            <div className="text-4xl mb-4">⚠️</div>
+                                            <h3 className="text-xl font-black text-gray-800 mb-2">이미지를 삭제할까요?</h3>
+                                            <p className="text-sm text-gray-500 mb-8">서버에서 영구히 삭제됩니다.</p>
+                                            <div className="flex gap-3 w-full">
+                                                <button onClick={() => setPolicyDeleteTarget(null)} className="flex-1 py-3 bg-gray-100 text-gray-600 rounded-xl font-bold">취소</button>
+                                                <button onClick={executePolicyDelete} className="flex-1 py-3 bg-red-600 text-white rounded-xl font-black shadow-lg">삭제 실행</button>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
                         </div>
                     </div>
                 </PopoutWindow>
             )}
 
 
-            {/* 🟢 [추가] 퀵 액션 메모 통합 모달 */}
-            {showActionMemo && actionMemoTarget && (
-                <div className="fixed inset-0 bg-black/50 z-[10000] flex justify-center items-center backdrop-blur-sm animate-fade-in">
-                    <div className="bg-white p-6 rounded-2xl w-[450px] border border-gray-200 shadow-2xl flex flex-col gap-4">
-                        <div className="flex justify-between items-center border-b border-gray-100 pb-3">
-                            <h3 className="text-lg font-black text-indigo-900 flex items-center gap-2">
-                                📝 메모 및 액션 처리
-                            </h3>
-                            <button onClick={() => setShowActionMemo(false)} className="text-gray-400 hover:text-red-500 text-2xl font-bold leading-none">×</button>
-                        </div>
-
-                        <div className="bg-gray-50 p-3 rounded-lg flex justify-between items-center border border-gray-200">
-                            <span className="text-sm font-bold text-gray-800">👤 {actionMemoTarget.name} 님</span>
-                            <span className="text-xs font-mono font-bold text-gray-500">{actionMemoTarget.phone}</span>
-                        </div>
-
-                        <textarea
-                            className="w-full h-32 p-3 bg-white border border-gray-300 rounded-lg text-sm outline-none focus:border-indigo-500 resize-none"
-                            placeholder="메모를 입력하고 원하는 액션을 선택하세요..."
-                            value={actionMemoText}
-                            onChange={(e) => setActionMemoText(e.target.value)}
-                        />
-
-                        {/* 즉시 액션 버튼 3가지 */}
-                        <div className="flex gap-2 mt-2">
-                            <button onClick={handleActionSaveMemoOnly} className="flex-1 py-2.5 bg-white border border-gray-300 text-gray-700 rounded-lg font-bold hover:bg-gray-50 text-xs transition">
-                                💾 일반 저장
-                            </button>
-                            <button onClick={handleActionMoveToTodo} className="flex-1 py-2.5 bg-blue-50 border border-blue-200 text-blue-700 rounded-lg font-bold hover:bg-blue-100 text-xs transition">
-                                📋 TO-DO 이동
-                            </button>
-                            <button onClick={handleActionMoveToNotepad} className="flex-1 py-2.5 bg-yellow-50 border border-yellow-200 text-yellow-700 rounded-lg font-bold hover:bg-yellow-100 text-xs transition">
-                                📒 메모장 이동
-                            </button>
-                        </div>
-
-                        {/* 관리자: 상담원 전달 */}
-                        <div className="mt-2 pt-4 border-t border-gray-100">
-                            <label className="block text-xs font-bold text-red-500 mb-2">📢 상담원에게 업무 전달 (관리자)</label>
-                            <div className="flex gap-2">
-                                <select
-                                    className="flex-1 p-2 border border-gray-300 rounded-lg text-sm outline-none focus:border-red-500 cursor-pointer"
-                                    value={targetAssignAgent}
-                                    onChange={(e) => setTargetAssignAgent(e.target.value)}
-                                >
-                                    <option value="">-- 전달할 상담원 선택 --</option>
-                                    <option value="ALL">전체 공지</option>
-                                    {agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}
-                                </select>
-                                <button onClick={handleActionAssignToAgent} className="bg-red-500 text-white px-4 rounded-lg font-bold text-xs hover:bg-red-600 transition">
-                                    업무 전달
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            )}
-
-                {/* 📱 연동 테스트 모달 (필요하다면 유지, 필요 없으면 이 블록 전체 삭제) */}
-                {showMobileModal && (
-                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex justify-center items-center animate-fade-in">
-                        <div className="bg-white rounded-3xl shadow-2xl w-[480px] overflow-hidden border border-gray-200">
-                            <div className="bg-indigo-600 p-5 text-white flex justify-between items-center">
+                {/* 🟢 [수정됨] 상세 메모 및 퀵 액션: 독립된 팝업 윈도우로 변경 */}
+                {showActionMemo && actionMemoTarget && (
+                    <PopoutWindow
+                        title={`📝 기록 관리 - ${actionMemoTarget.name}`}
+                        onClose={() => setShowActionMemo(false)}
+                        width={1000}
+                        height={700}
+                        windowKey="admin_action_memo_window"
+                        trigger={actionMemoTrigger}
+                    >
+                        <div className="flex flex-col h-screen bg-slate-100 font-sans overflow-hidden">
+                            {/* 상단 헤더 */}
+                            <div className="bg-indigo-900 px-6 py-4 flex justify-between items-center text-white shrink-0 shadow-lg">
                                 <div>
                                     <h3 className="text-lg font-black flex items-center gap-2">
-                                        <span>📱</span> 기기 연동 테스트
+                                        <span>📝 상세 기록 및 업무 관리</span>
+                                        <span className="text-sm font-bold text-indigo-300 ml-2">| {actionMemoTarget.name} ({actionMemoTarget.phone})</span>
                                     </h3>
                                 </div>
-                                <button onClick={() => setShowMobileModal(false)} className="text-white/70 hover:text-white text-2xl">×</button>
+                                <div className="text-[11px] font-bold bg-white/10 px-3 py-1.5 rounded-full border border-white/10">
+                                    독립 업무 모드
+                                </div>
                             </div>
-                            <div className="p-6 space-y-5 bg-slate-50">
-                                <div className="bg-orange-50 p-4 rounded-2xl border border-orange-100 shadow-sm">
-                                    <label className="block text-[10px] font-black text-orange-400 uppercase mb-1 ml-1">테스트 수신 번호</label>
+
+                            {/* 메인 컨텐츠 */}
+                            <div className="flex flex-1 overflow-hidden p-6 gap-6">
+
+                                {/* [LEFT] 메모 작성 및 저장 기능 */}
+                                <div className="flex-[1.2] flex flex-col min-w-0 bg-white rounded-3xl border border-gray-200 shadow-sm p-6">
+                                    <label className="text-[11px] font-black text-indigo-500 uppercase tracking-wider mb-2">✍️ 상담 메모 작성/수정</label>
+                                    <textarea
+                                        className="flex-1 w-full p-4 bg-slate-50 border border-gray-200 rounded-2xl text-sm leading-relaxed outline-none focus:ring-4 focus:ring-indigo-100 focus:border-indigo-500 focus:bg-white transition-all resize-none shadow-inner mb-6"
+                                        placeholder="상담 내용을 입력하세요..."
+                                        value={extractUserMemo(actionMemoText)}
+                                        onChange={(e) => {
+                                            const sysPart = extractSystemForm(actionMemoTarget.last_memo);
+                                            setActionMemoText(e.target.value + (sysPart ? "\n\n" + sysPart : ""));
+                                        }}
+                                    />
+
+                                    <div className="grid grid-cols-3 gap-3 mb-6">
+                                        <button onClick={handleActionSaveMemoOnly} className="py-4 bg-indigo-600 text-white rounded-2xl font-black text-sm shadow-lg hover:bg-indigo-700 transition transform active:scale-95">💾 메모 저장</button>
+                                        <button onClick={handleActionMoveToTodo} className="py-4 bg-blue-50 text-blue-700 border border-blue-200 rounded-2xl font-bold text-sm hover:bg-blue-100 transition">📋 TO-DO 등록</button>
+                                        <button onClick={handleActionMoveToNotepad} className="py-4 bg-yellow-50 text-yellow-700 border border-yellow-200 rounded-2xl font-bold text-sm hover:bg-yellow-100 transition">📒 개인노트</button>
+                                    </div>
+
+                                    <div className="pt-6 border-t border-gray-100">
+                                        <label className="block text-[11px] font-black text-red-500 mb-2 uppercase">📢 담당 상담원 업무 전달</label>
+                                        <div className="flex gap-2 bg-red-50 p-2 rounded-2xl border border-red-100">
+                                            <select
+                                                className="flex-1 p-3 bg-white border border-red-200 rounded-xl text-sm font-bold outline-none focus:border-red-500"
+                                                value={targetAssignAgent}
+                                                onChange={(e) => setTargetAssignAgent(e.target.value)}
+                                            >
+                                                <option value="">대상 선택...</option>
+                                                <option value="ALL">📢 전체 공지</option>
+                                                {agents.map(a => <option key={a.id} value={a.id}>{a.username}</option>)}
+                                            </select>
+                                            <button
+                                                onClick={handleActionAssignToAgent}
+                                                className="bg-red-500 text-white px-8 rounded-xl font-black text-sm hover:bg-red-600 transition shadow-md active:scale-95"
+                                            >
+                                                지시 전달
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* [RIGHT] 접수 양식 뷰어 */}
+                                <div className="flex-1 flex flex-col min-w-0 bg-white rounded-3xl border border-gray-200 shadow-sm p-6">
+                                    <label className="text-[11px] font-black text-emerald-600 uppercase tracking-wider mb-2">📄 등록된 접수 양식</label>
+                                    <div className={`flex-1 rounded-2xl border-2 border-dashed flex flex-col overflow-hidden transition-all ${extractSystemForm(actionMemoTarget.last_memo) ? 'border-emerald-200 bg-emerald-50/10' : 'border-gray-200 bg-gray-50 items-center justify-center'}`}>
+                                        {extractSystemForm(actionMemoTarget.last_memo) ? (
+                                            <div className="flex flex-col h-full">
+                                                <div className="p-5 flex-1 overflow-y-auto text-[13px] font-mono leading-relaxed text-gray-700 whitespace-pre-wrap select-all custom-scrollbar">
+                                                    {extractSystemForm(actionMemoTarget.last_memo)}
+                                                </div>
+                                                <button
+                                                    onClick={() => {
+                                                        navigator.clipboard.writeText(extractSystemForm(actionMemoTarget.last_memo));
+                                                        alert("양식이 복사되었습니다.");
+                                                    }}
+                                                    className="m-4 py-4 bg-emerald-600 text-white rounded-2xl font-black text-sm hover:bg-emerald-700 transition shadow-lg"
+                                                >
+                                                    📋 양식 전체 복사
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <div className="text-center p-10">
+                                                <span className="text-5xl mb-4 block opacity-10">📭</span>
+                                                <p className="text-gray-400 text-sm font-bold">등록된 접수 내역 없음</p>
+                                            </div>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* 하단 바 */}
+                            <div className="bg-white px-6 py-3 border-t text-[11px] text-gray-400 font-bold text-center">
+                                ※ 이 창은 별도의 독립된 윈도우입니다. 메인 화면을 조작하면서 동시에 메모를 작성할 수 있습니다.
+                            </div>
+                        </div>
+                    </PopoutWindow>
+                )}
+
+                {showMobileModal && (
+                    <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[10000] flex justify-center items-center animate-fade-in">
+                        <div className="bg-white rounded-3xl shadow-2xl w-[480px] overflow-hidden border border-gray-200">
+                            {/* 헤더: 더 깔끔하고 직관적인 제목 */}
+                            <div className="bg-indigo-600 p-6 text-white flex justify-between items-center">
+                                <div>
+                                    <h3 className="text-xl font-black flex items-center gap-2">
+                                        <span>📱</span> 기기 연동 실시간 설정
+                                    </h3>
+                                    <p className="text-indigo-100 text-[11px] opacity-80 mt-1">Traccar 앱의 Cloud Token을 입력하여 연동을 완료하세요.</p>
+                                </div>
+                                <button onClick={() => setShowMobileModal(false)} className="text-white/70 hover:text-white text-3xl">×</button>
+                            </div>
+
+                            <div className="p-6 space-y-6 bg-slate-50">
+                                {/* 토큰 입력 섹션: 강조된 디자인 */}
+                                <div className="space-y-2">
+                                    <label className="block text-[11px] font-black text-indigo-500 uppercase ml-1">
+                                        🔑 Cloud Token (기기 인증키)
+                                    </label>
+                                    <div className="relative group">
+                                        <textarea
+                                            className="w-full h-28 p-4 border-2 border-gray-100 rounded-2xl text-xs font-mono bg-white focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-50 outline-none transition-all break-all shadow-sm leading-relaxed"
+                                            placeholder="핸드폰 Traccar 앱 -> Cloud Service 탭에서 복사한 토큰을 여기에 붙여넣으세요."
+                                            value={smsConfig.token}
+                                            onChange={(e) => setSmsConfig({ token: e.target.value })}
+                                        />
+                                        {smsConfig.token && (
+                                            <button
+                                                onClick={() => setSmsConfig({ token: "" })}
+                                                className="absolute right-3 bottom-3 text-[10px] text-gray-300 hover:text-red-500 font-bold"
+                                            >
+                                                CLEAR
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+
+                                {/* 테스트 번호 입력 섹션: 가시성 확보 */}
+                                <div className="bg-white p-5 rounded-2xl border border-gray-200 shadow-sm">
+                                    <label className="block text-[11px] font-black text-gray-400 uppercase mb-2 ml-1">
+                                        📲 테스트 수신 번호
+                                    </label>
                                     <input
                                         type="text"
-                                        className="w-full p-3 border-2 border-orange-200 rounded-xl text-base font-black text-orange-600 outline-none focus:border-orange-400 transition-all bg-white"
+                                        className="w-full p-3 border-2 border-slate-100 rounded-xl text-base font-black text-indigo-600 outline-none focus:border-indigo-400 bg-slate-50 transition-all placeholder-gray-300"
                                         placeholder="01012345678"
                                         value={testPhoneNumber}
                                         onChange={(e) => setTestPhoneNumber(e.target.value)}
                                     />
+                                    <p className="text-[10px] text-gray-400 mt-2 text-center">숫자만 입력해 주세요. 발송 시 국가번호(+82)가 자동 부여됩니다.</p>
                                 </div>
+                            </div>
+
+                            {/* 하단 액션바 */}
+                            <div className="p-5 bg-white border-t border-gray-100 flex gap-3">
+                                <button
+                                    onClick={() => setShowMobileModal(false)}
+                                    className="flex-1 py-3.5 text-sm font-bold text-gray-400 hover:text-gray-600 hover:bg-gray-50 rounded-2xl transition"
+                                >
+                                    취소
+                                </button>
                                 <button
                                     onClick={handleExecuteMobileTest}
-                                    className="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-xl font-black text-sm shadow-lg transition-all active:scale-95"
+                                    className="flex-[2.5] bg-indigo-600 hover:bg-indigo-700 text-white py-3.5 rounded-2xl font-black text-sm shadow-lg shadow-indigo-100 transition-all active:scale-95 flex justify-center items-center gap-2"
                                 >
-                                    🚀 테스트 시작
+                                    🚀 테스트 메시지 발송
                                 </button>
                             </div>
                         </div>
                     </div>
                 )}
+
             </div> 
         </div>
     );
